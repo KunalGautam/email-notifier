@@ -3,4 +3,5 @@ notified_emails.json
 email-notifier
 email-notifier.exe
 *.log
+notification_history/
 config.json

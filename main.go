@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,9 @@ type AccountConfig struct {
 	CheckInterval           int      `json:"check_interval"`
 	CheckHistory            int      `json:"check_history"`
 	EnableNotificationSound bool     `json:"enable_notification_sound"`
+	FolderMode              string   `json:"folder_mode"` // "all", "include", "exclude"
+	IncludeFolders          []string `json:"include_folders"`
+	ExcludeFolders          []string `json:"exclude_folders"`
 	notifiedEmails          map[string]bool
 	lastCheckTime           time.Time
 	unreadCount             int
@@ -45,28 +49,24 @@ const (
 	configFile        = "config.json"
 	notifiedEmailsDir = "notification_history"
 	logFile           = "email-monitor.log"
+	foldersListFile   = "folders_list.json"
 )
 
 var (
 	config           Config
 	accountMenuItems map[string]*systray.MenuItem
 	mu               sync.RWMutex
-	connectionPool   sync.Map // Connection pool for reusing IMAP connections
 )
 
 func main() {
-	// Setup logging
 	setupLogging()
 
-	// Load or create config
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
 
-	// Create notification history directory
 	os.MkdirAll(notifiedEmailsDir, 0755)
 
-	// Load notification history for all accounts
 	for i := range config.Accounts {
 		config.Accounts[i].notifiedEmails = make(map[string]bool)
 		config.Accounts[i].stopChan = make(chan bool)
@@ -76,7 +76,6 @@ func main() {
 
 	log.Printf("Starting email monitor for %d accounts", len(config.Accounts))
 
-	// Start system tray
 	systray.Run(onReady, onExit)
 }
 
@@ -88,29 +87,23 @@ func setupLogging() {
 }
 
 func loadConfig() error {
-	// Check if config file exists
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		// Create sample config
 		return createSampleConfig()
 	}
 
-	// Read config file
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %v", err)
 	}
 
-	// Parse JSON
 	if err := json.Unmarshal(data, &config); err != nil {
 		return fmt.Errorf("failed to parse config file: %v", err)
 	}
 
-	// Validate accounts
 	if len(config.Accounts) == 0 {
 		return fmt.Errorf("no accounts configured in config.json")
 	}
 
-	// Set defaults
 	for i := range config.Accounts {
 		if config.Accounts[i].CheckInterval == 0 {
 			config.Accounts[i].CheckInterval = 120
@@ -120,6 +113,9 @@ func loadConfig() error {
 		}
 		if config.Accounts[i].Protocol == "" {
 			config.Accounts[i].Protocol = "imap"
+		}
+		if config.Accounts[i].FolderMode == "" {
+			config.Accounts[i].FolderMode = "all"
 		}
 	}
 
@@ -143,6 +139,9 @@ func createSampleConfig() error {
 				CheckInterval:           120,
 				CheckHistory:            1000,
 				EnableNotificationSound: true,
+				FolderMode:              "all",
+				IncludeFolders:          []string{"INBOX", "Work"},
+				ExcludeFolders:          []string{"Spam", "Trash"},
 			},
 		},
 	}
@@ -167,13 +166,11 @@ func onReady() {
 	systray.SetTitle("📧")
 	systray.SetTooltip(fmt.Sprintf("Email Monitor - %d accounts", len(config.Accounts)))
 
-	// Status
 	mStatus := systray.AddMenuItem("✅ Status: Running", "Current status")
 	mStatus.Disable()
 
 	systray.AddSeparator()
 
-	// Account menu items
 	accountMenuItems = make(map[string]*systray.MenuItem)
 	for i := range config.Accounts {
 		acc := &config.Accounts[i]
@@ -185,23 +182,25 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	// Actions
 	mCheckAll := systray.AddMenuItem("🔍 Check All Now", "Check all accounts immediately")
 	mClearHistory := systray.AddMenuItem("🗑️  Clear All History", "Clear notification history for all accounts")
+	
+	mFolders := systray.AddMenuItem("📁 Folder Management", "Manage email folders")
+	mListFolders := mFolders.AddSubMenuItem("📋 List All Folders", "Get list of all folders from all accounts")
+	mViewFolderList := mFolders.AddSubMenuItem("👁️  View Saved Folder List", "View previously saved folder list")
+	
 	mRestart := systray.AddMenuItem("🔄 Restart Monitor", "Restart email monitoring")
 	mReloadConfig := systray.AddMenuItem("⚙️  Reload Config", "Reload configuration file")
 
 	systray.AddSeparator()
 
-	mViewLogs := systray.AddMenuItem("📄 View Logs", "Open log file")
+	mViewLogs := systray.AddMenuItem("📄 View Logs Location", "Show log file path")
 	mExit := systray.AddMenuItem("❌ Exit", "Exit the application")
 
-	// Start monitoring all accounts
 	for i := range config.Accounts {
 		go startMonitoring(&config.Accounts[i])
 	}
 
-	// Handle menu clicks
 	go func() {
 		for {
 			select {
@@ -213,6 +212,14 @@ func onReady() {
 				log.Println("Clearing all notification history")
 				clearAllHistory()
 
+			case <-mListFolders.ClickedCh:
+				log.Println("Listing all folders")
+				go listAllFolders()
+
+			case <-mViewFolderList.ClickedCh:
+				log.Println("Viewing saved folder list")
+				viewSavedFolderList()
+
 			case <-mRestart.ClickedCh:
 				log.Println("Restarting all monitors...")
 				restartAllMonitors()
@@ -222,7 +229,7 @@ func onReady() {
 				reloadConfiguration()
 
 			case <-mViewLogs.ClickedCh:
-				beeep.Notify("Email Monitor", fmt.Sprintf("Log file: %s", logFile), "")
+				showFilePaths()
 
 			case <-mExit.ClickedCh:
 				log.Println("Exiting application...")
@@ -246,12 +253,11 @@ func onExit() {
 }
 
 func startMonitoring(acc *AccountConfig) {
-	log.Printf("Monitor started for: %s (interval: %ds)", acc.Email, acc.CheckInterval)
+	log.Printf("Monitor started for: %s (interval: %ds, mode: %s)", acc.Email, acc.CheckInterval, acc.FolderMode)
 
 	acc.ticker = time.NewTicker(time.Duration(acc.CheckInterval) * time.Second)
 	defer acc.ticker.Stop()
 
-	// Check immediately on start
 	if err := checkNewEmails(acc); err != nil {
 		log.Printf("[%s] Error: %v", acc.Email, err)
 	}
@@ -270,87 +276,90 @@ func startMonitoring(acc *AccountConfig) {
 }
 
 func checkNewEmails(acc *AccountConfig) error {
-	// Connect to IMAP server with timeout
-	c, err := connectWithTimeout(acc)
+	c, err := connectToIMAP(acc)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 	defer c.Logout()
 
-	// Select INBOX
-	mbox, err := c.Select("INBOX", false)
-	if err != nil {
-		return fmt.Errorf("failed to select INBOX: %v", err)
-	}
-
-	if mbox.Messages == 0 {
-		return nil
-	}
-
-	// Fetch only unseen messages
-	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = []string{imap.SeenFlag}
-	ids, err := c.Search(criteria)
-	if err != nil {
-		return fmt.Errorf("failed to search: %v", err)
-	}
-
-	if len(ids) == 0 {
-		return nil
-	}
-
-	// Update status
-	acc.mu.Lock()
-	acc.lastCheckTime = time.Now()
-	acc.unreadCount = len(ids)
-	fmt.Println(acc.unreadCount)
-	acc.mu.Unlock()
-	updateAccountMenuItem(acc)
-
-	// Fetch headers
-	seqset := new(imap.SeqSet)
-	seqset.AddNum(ids...)
-
-	messages := make(chan *imap.Message, len(ids))
-	section := &imap.BodySectionName{
-		BodyPartName: imap.BodyPartName{},
-		Peek:         true,
-	}
-
-	items := []imap.FetchItem{
-		imap.FetchEnvelope,
-		imap.FetchUid,
-		section.FetchItem(),
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- c.Fetch(seqset, items, messages)
-	}()
-
-	// Process messages with filters
+	folders := getFoldersToCheck(acc, c)
+	
+	totalUnread := 0
 	newNotifications := false
-	for msg := range messages {
-		if msg.Envelope != nil && msg.Uid > 0 {
-			emailID := generateEmailID(msg.Uid, msg.Envelope.MessageId)
 
-			acc.mu.Lock()
-			alreadyNotified := acc.notifiedEmails[emailID]
-			acc.mu.Unlock()
+	for _, folder := range folders {
+		mbox, err := c.Select(folder, false)
+		if err != nil {
+			log.Printf("[%s] Failed to select folder %s: %v", acc.Email, folder, err)
+			continue
+		}
 
-			if !alreadyNotified && applyFilters(acc, msg.Envelope) {
-				showNotification(acc, msg.Envelope)
+		totalUnread += int(mbox.Unseen)
+
+		if mbox.Messages == 0 {
+			continue
+		}
+
+		criteria := imap.NewSearchCriteria()
+		criteria.WithoutFlags = []string{imap.SeenFlag}
+		ids, err := c.Search(criteria)
+		if err != nil {
+			log.Printf("[%s] Failed to search in %s: %v", acc.Email, folder, err)
+			continue
+		}
+
+		if len(ids) == 0 {
+			continue
+		}
+
+		seqset := new(imap.SeqSet)
+		seqset.AddNum(ids...)
+
+		messages := make(chan *imap.Message, len(ids))
+		section := &imap.BodySectionName{
+			BodyPartName: imap.BodyPartName{},
+			Peek:         true,
+		}
+
+		items := []imap.FetchItem{
+			imap.FetchEnvelope,
+			imap.FetchUid,
+			section.FetchItem(),
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- c.Fetch(seqset, items, messages)
+		}()
+
+		for msg := range messages {
+			if msg.Envelope != nil && msg.Uid > 0 {
+				emailID := generateEmailID(folder, msg.Uid, msg.Envelope.MessageId)
+
 				acc.mu.Lock()
-				acc.notifiedEmails[emailID] = true
+				alreadyNotified := acc.notifiedEmails[emailID]
 				acc.mu.Unlock()
-				newNotifications = true
+
+				if !alreadyNotified && applyFilters(acc, msg.Envelope) {
+					showNotification(acc, folder, msg.Envelope)
+					acc.mu.Lock()
+					acc.notifiedEmails[emailID] = true
+					acc.mu.Unlock()
+					newNotifications = true
+				}
 			}
+		}
+
+		if err := <-done; err != nil {
+			log.Printf("[%s] Failed to fetch from %s: %v", acc.Email, folder, err)
 		}
 	}
 
-	if err := <-done; err != nil {
-		return fmt.Errorf("failed to fetch: %v", err)
-	}
+	acc.mu.Lock()
+	acc.lastCheckTime = time.Now()
+	acc.unreadCount = totalUnread
+	acc.mu.Unlock()
+	updateAccountMenuItem(acc)
 
 	if newNotifications {
 		saveNotifiedEmails(acc)
@@ -359,7 +368,162 @@ func checkNewEmails(acc *AccountConfig) error {
 	return nil
 }
 
-func connectWithTimeout(acc *AccountConfig) (*client.Client, error) {
+func getFoldersToCheck(acc *AccountConfig, c *client.Client) []string {
+	switch acc.FolderMode {
+	case "include":
+		return acc.IncludeFolders
+	case "exclude":
+		allFolders := listFolders(c)
+		excludeMap := make(map[string]bool)
+		for _, f := range acc.ExcludeFolders {
+			excludeMap[f] = true
+		}
+		var result []string
+		for _, f := range allFolders {
+			if !excludeMap[f] {
+				result = append(result, f)
+			}
+		}
+		return result
+	default: // "all"
+		return listFolders(c)
+	}
+}
+
+func listFolders(c *client.Client) []string {
+	mailboxes := make(chan *imap.MailboxInfo, 10)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.List("", "*", mailboxes)
+	}()
+
+	var folders []string
+	for m := range mailboxes {
+		folders = append(folders, m.Name)
+	}
+
+	if err := <-done; err != nil {
+		log.Printf("Error listing folders: %v", err)
+	}
+
+	return folders
+}
+
+func listAllFolders() {
+	type FolderInfo struct {
+		Account string   `json:"account"`
+		Folders []string `json:"folders"`
+	}
+
+	var allFolders []FolderInfo
+
+	for i := range config.Accounts {
+		acc := &config.Accounts[i]
+		c, err := connectToIMAP(acc)
+		if err != nil {
+			log.Printf("[%s] Failed to connect: %v", acc.Email, err)
+			continue
+		}
+
+		folders := listFolders(c)
+		c.Logout()
+
+		allFolders = append(allFolders, FolderInfo{
+			Account: acc.Email,
+			Folders: folders,
+		})
+
+		log.Printf("[%s] Found %d folders", acc.Email, len(folders))
+	}
+
+	// Save to JSON file
+	data, err := json.MarshalIndent(allFolders, "", "  ")
+	if err != nil {
+		log.Printf("Failed to marshal folder list: %v", err)
+		beeep.Alert("Email Monitor", "Failed to save folder list", "")
+		return
+	}
+
+	if err := os.WriteFile(foldersListFile, data, 0644); err != nil {
+		log.Printf("Failed to write folder list: %v", err)
+		beeep.Alert("Email Monitor", "Failed to save folder list", "")
+		return
+	}
+
+	// Create notification message
+	absPath, _ := filepath.Abs(foldersListFile)
+	message := fmt.Sprintf("Folder list saved to:\n%s\n\nTotal accounts: %d", absPath, len(allFolders))
+	
+	beeep.Notify("📁 Folder List Saved", message, "")
+	
+	// Also show summary
+	summary := "Folders per account:\n"
+	for _, info := range allFolders {
+		summary += fmt.Sprintf("\n%s: %d folders", info.Account, len(info.Folders))
+	}
+	log.Println(summary)
+}
+
+func viewSavedFolderList() {
+	if _, err := os.Stat(foldersListFile); os.IsNotExist(err) {
+		beeep.Alert("Email Monitor", "No saved folder list found.\nUse 'List All Folders' first.", "")
+		return
+	}
+
+	data, err := os.ReadFile(foldersListFile)
+	if err != nil {
+		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to read folder list: %v", err), "")
+		return
+	}
+
+	type FolderInfo struct {
+		Account string   `json:"account"`
+		Folders []string `json:"folders"`
+	}
+
+	var allFolders []FolderInfo
+	if err := json.Unmarshal(data, &allFolders); err != nil {
+		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to parse folder list: %v", err), "")
+		return
+	}
+
+	absPath, _ := filepath.Abs(foldersListFile)
+	message := fmt.Sprintf("Folder list location:\n%s\n\n", absPath)
+	
+	for _, info := range allFolders {
+		message += fmt.Sprintf("%s (%d folders):\n", info.Account, len(info.Folders))
+		for _, folder := range info.Folders {
+			message += fmt.Sprintf("  • %s\n", folder)
+		}
+		message += "\n"
+	}
+
+	// Truncate if too long
+	if len(message) > 500 {
+		message = message[:497] + "..."
+	}
+
+	beeep.Notify("📁 Saved Folder List", message, "")
+}
+
+func showFilePaths() {
+	logPath, _ := filepath.Abs(logFile)
+	configPath, _ := filepath.Abs(configFile)
+	folderListPath, _ := filepath.Abs(foldersListFile)
+	historyPath, _ := filepath.Abs(notifiedEmailsDir)
+
+	message := fmt.Sprintf(
+		"Config: %s\n\nLog: %s\n\nFolder List: %s\n\nHistory: %s",
+		configPath,
+		logPath,
+		folderListPath,
+		historyPath,
+	)
+
+	beeep.Notify("📂 File Locations", message, "")
+}
+
+func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
 	c, err := client.DialTLS(fmt.Sprintf("%s:%d", acc.Server, acc.Port), nil)
 	if err != nil {
 		return nil, err
@@ -374,7 +538,6 @@ func connectWithTimeout(acc *AccountConfig) (*client.Client, error) {
 }
 
 func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
-	// Get sender email
 	var senderEmail string
 	if len(env.From) > 0 && env.From[0].MailboxName != "" && env.From[0].HostName != "" {
 		senderEmail = env.From[0].MailboxName + "@" + env.From[0].HostName
@@ -382,7 +545,6 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 
 	subject := strings.ToLower(env.Subject)
 
-	// Check exclude email list first
 	for _, excludeEmail := range acc.ExcludeEmail {
 		if strings.EqualFold(senderEmail, excludeEmail) {
 			log.Printf("[%s] Filtered out (exclude email): %s", acc.Email, senderEmail)
@@ -390,7 +552,6 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 		}
 	}
 
-	// Check exclude keywords
 	for _, keyword := range acc.ExcludeKeyword {
 		if strings.Contains(subject, strings.ToLower(keyword)) {
 			log.Printf("[%s] Filtered out (exclude keyword '%s'): %s", acc.Email, keyword, subject)
@@ -398,11 +559,9 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 		}
 	}
 
-	// If include lists are not empty, check them
 	hasIncludeFilters := len(acc.IncludeEmail) > 0 || len(acc.IncludeKeyword) > 0
 
 	if hasIncludeFilters {
-		// Check include email list
 		if len(acc.IncludeEmail) > 0 {
 			emailMatch := false
 			for _, includeEmail := range acc.IncludeEmail {
@@ -416,7 +575,6 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 			}
 		}
 
-		// Check include keywords
 		if len(acc.IncludeKeyword) > 0 {
 			for _, keyword := range acc.IncludeKeyword {
 				if strings.Contains(subject, strings.ToLower(keyword)) {
@@ -425,7 +583,6 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 			}
 		}
 
-		// If include filters exist but none matched, filter out
 		log.Printf("[%s] Filtered out (no include match): %s - %s", acc.Email, senderEmail, subject)
 		return false
 	}
@@ -492,11 +649,11 @@ func reloadConfiguration() {
 	beeep.Notify("Email Monitor", "Configuration reloaded", "")
 }
 
-func generateEmailID(uid uint32, messageID string) string {
+func generateEmailID(folder string, uid uint32, messageID string) string {
 	if messageID != "" {
-		return fmt.Sprintf("%d-%s", uid, messageID)
+		return fmt.Sprintf("%s-%d-%s", folder, uid, messageID)
 	}
-	return fmt.Sprintf("%d", uid)
+	return fmt.Sprintf("%s-%d", folder, uid)
 }
 
 func loadNotifiedEmails(acc *AccountConfig) {
@@ -556,7 +713,7 @@ func sanitizeFilename(s string) string {
 	return strings.ReplaceAll(s, "@", "_at_")
 }
 
-func showNotification(acc *AccountConfig, env *imap.Envelope) {
+func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 	var sender string
 	if len(env.From) > 0 {
 		if env.From[0].MailboxName != "" && env.From[0].HostName != "" {
@@ -575,13 +732,12 @@ func showNotification(acc *AccountConfig, env *imap.Envelope) {
 		subject = "(No Subject)"
 	}
 
-	// Truncate long subjects
 	displaySubject := subject
 	if len(displaySubject) > 50 {
 		displaySubject = displaySubject[:47] + "..."
 	}
 
-	title := fmt.Sprintf("📧 %s", acc.Email)
+	title := fmt.Sprintf("📧 %s [%s]", acc.Email, folder)
 	message := fmt.Sprintf("From: %s\nSubject: %s", sender, displaySubject)
 
 	var err error
@@ -595,8 +751,8 @@ func showNotification(acc *AccountConfig, env *imap.Envelope) {
 		log.Printf("[%s] Failed to send notification: %v", acc.Email, err)
 	}
 
-	log.Printf("[%s] NEW EMAIL - From: %s | Subject: %s", acc.Email, sender, subject)
-	fmt.Printf("\n[%s] 📧 NEW EMAIL\n", acc.Email)
+	log.Printf("[%s][%s] NEW EMAIL - From: %s | Subject: %s", acc.Email, folder, sender, subject)
+	fmt.Printf("\n[%s][%s] 📧 NEW EMAIL\n", acc.Email, folder)
 	fmt.Printf("From: %s\nSubject: %s\nTime: %s\n\n", sender, subject, time.Now().Format("15:04:05"))
 }
 

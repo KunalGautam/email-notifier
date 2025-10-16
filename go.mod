@@ -6,7 +6,6 @@ require (
 	github.com/emersion/go-imap v1.2.1
 	github.com/gen2brain/beeep v0.11.1
 	github.com/getlantern/systray v1.2.2
-	github.com/joho/godotenv v1.5.1
 )
 
 require (

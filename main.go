@@ -5,168 +5,224 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
-	"github.com/joho/godotenv"
 )
 
-type EmailConfig struct {
-	Server            string
-	Port              string
-	Email             string
-	Password          string
-	CheckInterval     int
-	MaxHistory        int
-	NotificationSound bool
+type AccountConfig struct {
+	Email                   string   `json:"email"`
+	Server                  string   `json:"server"`
+	Port                    int      `json:"port"`
+	Username                string   `json:"username"`
+	Password                string   `json:"password"`
+	Protocol                string   `json:"protocol"`
+	IncludeKeyword          []string `json:"include_keyword"`
+	ExcludeKeyword          []string `json:"exclude_keyword"`
+	IncludeEmail            []string `json:"include_email"`
+	ExcludeEmail            []string `json:"exclude_email"`
+	CheckInterval           int      `json:"check_interval"`
+	CheckHistory            int      `json:"check_history"`
+	EnableNotificationSound bool     `json:"enable_notification_sound"`
+	notifiedEmails          map[string]bool
+	lastCheckTime           time.Time
+	unreadCount             int
+	mu                      sync.RWMutex
+	stopChan                chan bool
+	ticker                  *time.Ticker
 }
 
-const notifiedEmailsFile = "notified_emails.json"
+type Config struct {
+	Accounts []AccountConfig `json:"accounts"`
+}
 
-// Track notified emails using a map
-var notifiedEmails = make(map[string]bool)
-var config EmailConfig
-var stopChan chan bool
-var ticker *time.Ticker
-var mUnreadCount *systray.MenuItem
-var mLastCheck *systray.MenuItem
-var lastCheckTime time.Time
-var unreadCount int
+const (
+	configFile        = "config.json"
+	notifiedEmailsDir = "notification_history"
+	logFile           = "email-monitor.log"
+)
+
+var (
+	config           Config
+	accountMenuItems map[string]*systray.MenuItem
+	mu               sync.RWMutex
+	connectionPool   sync.Map // Connection pool for reusing IMAP connections
+)
 
 func main() {
 	// Setup logging
-	logFile, err := os.OpenFile("email-monitor.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err == nil {
-		log.SetOutput(logFile)
-		defer logFile.Close()
+	setupLogging()
+
+	// Load or create config
+	if err := loadConfig(); err != nil {
+		log.Fatal(err)
 	}
 
-	// Load .env file
-	err = godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	// Create notification history directory
+	os.MkdirAll(notifiedEmailsDir, 0755)
+
+	// Load notification history for all accounts
+	for i := range config.Accounts {
+		config.Accounts[i].notifiedEmails = make(map[string]bool)
+		config.Accounts[i].stopChan = make(chan bool)
+		loadNotifiedEmails(&config.Accounts[i])
+		cleanupOldNotifications(&config.Accounts[i])
 	}
 
-	// Read configuration from environment variables with defaults
-	checkInterval, _ := strconv.Atoi(os.Getenv("CHECK_INTERVAL"))
-	if checkInterval == 0 {
-		checkInterval = 30
-	}
-
-	maxHistory, _ := strconv.Atoi(os.Getenv("MAX_HISTORY"))
-	if maxHistory == 0 {
-		maxHistory = 1000
-	}
-
-	notificationSound := os.Getenv("NOTIFICATION_SOUND") != "false"
-
-	config = EmailConfig{
-		Server:            os.Getenv("IMAP_SERVER"),
-		Port:              os.Getenv("IMAP_PORT"),
-		Email:             os.Getenv("EMAIL"),
-		Password:          os.Getenv("PASSWORD"),
-		CheckInterval:     checkInterval,
-		MaxHistory:        maxHistory,
-		NotificationSound: notificationSound,
-	}
-
-	// Validate configuration
-	if config.Server == "" || config.Port == "" || config.Email == "" || config.Password == "" {
-		log.Fatal("Missing required configuration. Please check your .env file")
-	}
-
-	// Load and cleanup notified emails
-	loadNotifiedEmails()
-	cleanupOldNotifications()
-
-	log.Printf("Starting email monitor for: %s (check interval: %ds)", config.Email, config.CheckInterval)
+	log.Printf("Starting email monitor for %d accounts", len(config.Accounts))
 
 	// Start system tray
 	systray.Run(onReady, onExit)
 }
 
+func setupLogging() {
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.SetOutput(f)
+	}
+}
+
+func loadConfig() error {
+	// Check if config file exists
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		// Create sample config
+		return createSampleConfig()
+	}
+
+	// Read config file
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %v", err)
+	}
+
+	// Parse JSON
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config file: %v", err)
+	}
+
+	// Validate accounts
+	if len(config.Accounts) == 0 {
+		return fmt.Errorf("no accounts configured in config.json")
+	}
+
+	// Set defaults
+	for i := range config.Accounts {
+		if config.Accounts[i].CheckInterval == 0 {
+			config.Accounts[i].CheckInterval = 120
+		}
+		if config.Accounts[i].CheckHistory == 0 {
+			config.Accounts[i].CheckHistory = 1000
+		}
+		if config.Accounts[i].Protocol == "" {
+			config.Accounts[i].Protocol = "imap"
+		}
+	}
+
+	return nil
+}
+
+func createSampleConfig() error {
+	sampleConfig := Config{
+		Accounts: []AccountConfig{
+			{
+				Email:                   "user@example.com",
+				Server:                  "imap.example.com",
+				Port:                    993,
+				Username:                "user@example.com",
+				Password:                "your-password",
+				Protocol:                "imap",
+				IncludeKeyword:          []string{"urgent", "invoice"},
+				ExcludeKeyword:          []string{"promotion", "newsletter"},
+				IncludeEmail:            []string{"boss@company.com"},
+				ExcludeEmail:            []string{"spam@example.com"},
+				CheckInterval:           120,
+				CheckHistory:            1000,
+				EnableNotificationSound: true,
+			},
+		},
+	}
+
+	data, err := json.MarshalIndent(sampleConfig, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to create sample config: %v", err)
+	}
+
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write sample config: %v", err)
+	}
+
+	log.Printf("Created sample config file: %s", configFile)
+	fmt.Printf("Sample config created: %s\nPlease edit it with your email settings and restart.\n", configFile)
+	os.Exit(0)
+	return nil
+}
+
 func onReady() {
-	// Set icon
 	systray.SetIcon(getIconData())
 	systray.SetTitle("📧")
-	systray.SetTooltip(fmt.Sprintf("Email Monitor - %s", config.Email))
+	systray.SetTooltip(fmt.Sprintf("Email Monitor - %d accounts", len(config.Accounts)))
 
-	// Add menu items
+	// Status
 	mStatus := systray.AddMenuItem("✅ Status: Running", "Current status")
 	mStatus.Disable()
 
-	mUnreadCount = systray.AddMenuItem("📬 Unread: Checking...", "Unread email count")
-	mUnreadCount.Disable()
+	systray.AddSeparator()
 
-	mLastCheck = systray.AddMenuItem("🕐 Last Check: Never", "Last check time")
-	mLastCheck.Disable()
+	// Account menu items
+	accountMenuItems = make(map[string]*systray.MenuItem)
+	for i := range config.Accounts {
+		acc := &config.Accounts[i]
+		menuText := fmt.Sprintf("📧 %s - Checking...", acc.Email)
+		mAccount := systray.AddMenuItem(menuText, fmt.Sprintf("Account: %s", acc.Email))
+		mAccount.Disable()
+		accountMenuItems[acc.Email] = mAccount
+	}
 
 	systray.AddSeparator()
 
-	mEmail := systray.AddMenuItem(fmt.Sprintf("📧 %s", config.Email), "Monitored email")
-	mEmail.Disable()
-
-	mInterval := systray.AddMenuItem(fmt.Sprintf("⏱️  Interval: %ds", config.CheckInterval), "Check interval")
-	mInterval.Disable()
-
-	systray.AddSeparator()
-
-	mCheckNow := systray.AddMenuItem("🔍 Check Now", "Check for new emails immediately")
-	mClearHistory := systray.AddMenuItem("🗑️  Clear History", "Clear notification history")
+	// Actions
+	mCheckAll := systray.AddMenuItem("🔍 Check All Now", "Check all accounts immediately")
+	mClearHistory := systray.AddMenuItem("🗑️  Clear All History", "Clear notification history for all accounts")
 	mRestart := systray.AddMenuItem("🔄 Restart Monitor", "Restart email monitoring")
+	mReloadConfig := systray.AddMenuItem("⚙️  Reload Config", "Reload configuration file")
 
 	systray.AddSeparator()
 
 	mViewLogs := systray.AddMenuItem("📄 View Logs", "Open log file")
 	mExit := systray.AddMenuItem("❌ Exit", "Exit the application")
 
-	// Initialize channel
-	stopChan = make(chan bool)
-
-	// Start monitoring
-	go startMonitoring()
+	// Start monitoring all accounts
+	for i := range config.Accounts {
+		go startMonitoring(&config.Accounts[i])
+	}
 
 	// Handle menu clicks
 	go func() {
 		for {
 			select {
-			case <-mCheckNow.ClickedCh:
-				log.Println("Manual check triggered")
-				go func() {
-					if err := checkNewEmails(config); err != nil {
-						log.Printf("Error during manual check: %v", err)
-						beeep.Alert("Email Monitor", fmt.Sprintf("Check failed: %v", err), "")
-					} else {
-						beeep.Notify("Email Monitor", "Manual check completed", "")
-					}
-				}()
+			case <-mCheckAll.ClickedCh:
+				log.Println("Manual check all triggered")
+				checkAllAccounts()
 
 			case <-mClearHistory.ClickedCh:
-				log.Println("Clearing notification history")
-				notifiedEmails = make(map[string]bool)
-				if err := saveNotifiedEmails(); err != nil {
-					log.Printf("Error clearing history: %v", err)
-					beeep.Alert("Email Monitor", "Failed to clear history", "")
-				} else {
-					beeep.Notify("Email Monitor", "Notification history cleared", "")
-				}
+				log.Println("Clearing all notification history")
+				clearAllHistory()
 
 			case <-mRestart.ClickedCh:
-				log.Println("Restarting monitor...")
-				beeep.Notify("Email Monitor", "Restarting monitor...", "")
-				stopChan <- true
-				time.Sleep(1 * time.Second)
-				go startMonitoring()
+				log.Println("Restarting all monitors...")
+				restartAllMonitors()
+
+			case <-mReloadConfig.ClickedCh:
+				log.Println("Reloading configuration...")
+				reloadConfiguration()
 
 			case <-mViewLogs.ClickedCh:
-				// Try to open log file with default text editor
-				log.Println("Opening log file")
-				// This is basic - you could use exec.Command to open with xdg-open/open
-				beeep.Notify("Email Monitor", "Log file: email-monitor.log", "")
+				beeep.Notify("Email Monitor", fmt.Sprintf("Log file: %s", logFile), "")
 
 			case <-mExit.ClickedCh:
 				log.Println("Exiting application...")
@@ -179,51 +235,47 @@ func onReady() {
 
 func onExit() {
 	log.Println("Email monitor stopped")
-	if stopChan != nil {
-		close(stopChan)
-	}
-	if ticker != nil {
-		ticker.Stop()
+	for i := range config.Accounts {
+		if config.Accounts[i].stopChan != nil {
+			close(config.Accounts[i].stopChan)
+		}
+		if config.Accounts[i].ticker != nil {
+			config.Accounts[i].ticker.Stop()
+		}
 	}
 }
 
-func startMonitoring() {
-	log.Printf("Monitor started for: %s", config.Email)
-	beeep.Notify("📧 Email Monitor", fmt.Sprintf("Monitoring: %s", config.Email), "")
+func startMonitoring(acc *AccountConfig) {
+	log.Printf("Monitor started for: %s (interval: %ds)", acc.Email, acc.CheckInterval)
 
-	ticker = time.NewTicker(time.Duration(config.CheckInterval) * time.Second)
-	defer ticker.Stop()
+	acc.ticker = time.NewTicker(time.Duration(acc.CheckInterval) * time.Second)
+	defer acc.ticker.Stop()
 
 	// Check immediately on start
-	if err := checkNewEmails(config); err != nil {
-		log.Printf("Error checking emails: %v", err)
+	if err := checkNewEmails(acc); err != nil {
+		log.Printf("[%s] Error: %v", acc.Email, err)
 	}
 
 	for {
 		select {
-		case <-ticker.C:
-			if err := checkNewEmails(config); err != nil {
-				log.Printf("Error checking emails: %v", err)
+		case <-acc.ticker.C:
+			if err := checkNewEmails(acc); err != nil {
+				log.Printf("[%s] Error: %v", acc.Email, err)
 			}
-		case <-stopChan:
-			log.Println("Monitor stopped")
+		case <-acc.stopChan:
+			log.Printf("[%s] Monitor stopped", acc.Email)
 			return
 		}
 	}
 }
 
-func checkNewEmails(config EmailConfig) error {
-	// Connect to IMAP server
-	c, err := client.DialTLS(config.Server+":"+config.Port, nil)
+func checkNewEmails(acc *AccountConfig) error {
+	// Connect to IMAP server with timeout
+	c, err := connectWithTimeout(acc)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 	defer c.Logout()
-
-	// Login
-	if err := c.Login(config.Email, config.Password); err != nil {
-		return fmt.Errorf("failed to login: %v", err)
-	}
 
 	// Select INBOX
 	mbox, err := c.Select("INBOX", false)
@@ -231,10 +283,12 @@ func checkNewEmails(config EmailConfig) error {
 		return fmt.Errorf("failed to select INBOX: %v", err)
 	}
 
-	// Update last check time and unread count
-	lastCheckTime = time.Now()
-	unreadCount = int(mbox.Unseen)
-	updateMenuItems()
+	// Update status
+	acc.mu.Lock()
+	acc.lastCheckTime = time.Now()
+	acc.unreadCount = int(mbox.Unseen)
+	acc.mu.Unlock()
+	updateAccountMenuItem(acc)
 
 	if mbox.Messages == 0 {
 		return nil
@@ -252,7 +306,7 @@ func checkNewEmails(config EmailConfig) error {
 		return nil
 	}
 
-	// Fetch headers for unseen messages
+	// Fetch headers
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(ids...)
 
@@ -262,7 +316,6 @@ func checkNewEmails(config EmailConfig) error {
 		Peek:         true,
 	}
 
-	// Fetch envelope and UID
 	items := []imap.FetchItem{
 		imap.FetchEnvelope,
 		imap.FetchUid,
@@ -274,17 +327,21 @@ func checkNewEmails(config EmailConfig) error {
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
-	// Process messages
+	// Process messages with filters
 	newNotifications := false
 	for msg := range messages {
 		if msg.Envelope != nil && msg.Uid > 0 {
-			// Create unique identifier using UID and Message-ID
 			emailID := generateEmailID(msg.Uid, msg.Envelope.MessageId)
 
-			// Check if already notified
-			if !notifiedEmails[emailID] {
-				showNotification(msg.Envelope)
-				notifiedEmails[emailID] = true
+			acc.mu.Lock()
+			alreadyNotified := acc.notifiedEmails[emailID]
+			acc.mu.Unlock()
+
+			if !alreadyNotified && applyFilters(acc, msg.Envelope) {
+				showNotification(acc, msg.Envelope)
+				acc.mu.Lock()
+				acc.notifiedEmails[emailID] = true
+				acc.mu.Unlock()
 				newNotifications = true
 			}
 		}
@@ -294,23 +351,144 @@ func checkNewEmails(config EmailConfig) error {
 		return fmt.Errorf("failed to fetch: %v", err)
 	}
 
-	// Save to file if there were new notifications
 	if newNotifications {
-		if err := saveNotifiedEmails(); err != nil {
-			log.Printf("Warning: failed to save notified emails: %v", err)
-		}
+		saveNotifiedEmails(acc)
 	}
 
 	return nil
 }
 
-func updateMenuItems() {
-	if mUnreadCount != nil {
-		mUnreadCount.SetTitle(fmt.Sprintf("📬 Unread: %d", unreadCount))
+func connectWithTimeout(acc *AccountConfig) (*client.Client, error) {
+	c, err := client.DialTLS(fmt.Sprintf("%s:%d", acc.Server, acc.Port), nil)
+	if err != nil {
+		return nil, err
 	}
-	if mLastCheck != nil {
-		mLastCheck.SetTitle(fmt.Sprintf("🕐 Last Check: %s", lastCheckTime.Format("15:04:05")))
+
+	if err := c.Login(acc.Username, acc.Password); err != nil {
+		c.Logout()
+		return nil, err
 	}
+
+	return c, nil
+}
+
+func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
+	// Get sender email
+	var senderEmail string
+	if len(env.From) > 0 && env.From[0].MailboxName != "" && env.From[0].HostName != "" {
+		senderEmail = env.From[0].MailboxName + "@" + env.From[0].HostName
+	}
+
+	subject := strings.ToLower(env.Subject)
+
+	// Check exclude email list first
+	for _, excludeEmail := range acc.ExcludeEmail {
+		if strings.EqualFold(senderEmail, excludeEmail) {
+			log.Printf("[%s] Filtered out (exclude email): %s", acc.Email, senderEmail)
+			return false
+		}
+	}
+
+	// Check exclude keywords
+	for _, keyword := range acc.ExcludeKeyword {
+		if strings.Contains(subject, strings.ToLower(keyword)) {
+			log.Printf("[%s] Filtered out (exclude keyword '%s'): %s", acc.Email, keyword, subject)
+			return false
+		}
+	}
+
+	// If include lists are not empty, check them
+	hasIncludeFilters := len(acc.IncludeEmail) > 0 || len(acc.IncludeKeyword) > 0
+
+	if hasIncludeFilters {
+		// Check include email list
+		if len(acc.IncludeEmail) > 0 {
+			emailMatch := false
+			for _, includeEmail := range acc.IncludeEmail {
+				if strings.EqualFold(senderEmail, includeEmail) {
+					emailMatch = true
+					break
+				}
+			}
+			if emailMatch {
+				return true
+			}
+		}
+
+		// Check include keywords
+		if len(acc.IncludeKeyword) > 0 {
+			for _, keyword := range acc.IncludeKeyword {
+				if strings.Contains(subject, strings.ToLower(keyword)) {
+					return true
+				}
+			}
+		}
+
+		// If include filters exist but none matched, filter out
+		log.Printf("[%s] Filtered out (no include match): %s - %s", acc.Email, senderEmail, subject)
+		return false
+	}
+
+	return true
+}
+
+func updateAccountMenuItem(acc *AccountConfig) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if item, exists := accountMenuItems[acc.Email]; exists {
+		acc.mu.RLock()
+		menuText := fmt.Sprintf("📧 %s - Unread: %d (Last: %s)",
+			acc.Email,
+			acc.unreadCount,
+			acc.lastCheckTime.Format("15:04:05"))
+		acc.mu.RUnlock()
+		item.SetTitle(menuText)
+	}
+}
+
+func checkAllAccounts() {
+	var wg sync.WaitGroup
+	for i := range config.Accounts {
+		wg.Add(1)
+		go func(acc *AccountConfig) {
+			defer wg.Done()
+			if err := checkNewEmails(acc); err != nil {
+				log.Printf("[%s] Manual check error: %v", acc.Email, err)
+			}
+		}(&config.Accounts[i])
+	}
+	wg.Wait()
+	beeep.Notify("Email Monitor", "Manual check completed for all accounts", "")
+}
+
+func clearAllHistory() {
+	for i := range config.Accounts {
+		config.Accounts[i].mu.Lock()
+		config.Accounts[i].notifiedEmails = make(map[string]bool)
+		config.Accounts[i].mu.Unlock()
+		saveNotifiedEmails(&config.Accounts[i])
+	}
+	beeep.Notify("Email Monitor", "All notification history cleared", "")
+}
+
+func restartAllMonitors() {
+	for i := range config.Accounts {
+		config.Accounts[i].stopChan <- true
+		time.Sleep(100 * time.Millisecond)
+		config.Accounts[i].stopChan = make(chan bool)
+		go startMonitoring(&config.Accounts[i])
+	}
+	beeep.Notify("Email Monitor", "All monitors restarted", "")
+}
+
+func reloadConfiguration() {
+	if err := loadConfig(); err != nil {
+		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to reload config: %v", err), "")
+		return
+	}
+	restartAllMonitors()
+	beeep.Notify("Email Monitor", "Configuration reloaded", "")
 }
 
 func generateEmailID(uid uint32, messageID string) string {
@@ -320,63 +498,64 @@ func generateEmailID(uid uint32, messageID string) string {
 	return fmt.Sprintf("%d", uid)
 }
 
-func loadNotifiedEmails() {
-	file, err := os.ReadFile(notifiedEmailsFile)
+func loadNotifiedEmails(acc *AccountConfig) {
+	filename := fmt.Sprintf("%s/%s.json", notifiedEmailsDir, sanitizeFilename(acc.Email))
+	file, err := os.ReadFile(filename)
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("No previous notification history found, starting fresh")
-			return
+		if !os.IsNotExist(err) {
+			log.Printf("[%s] Warning: failed to load notified emails: %v", acc.Email, err)
 		}
-		log.Printf("Warning: failed to load notified emails: %v", err)
 		return
 	}
 
 	var emails []string
 	if err := json.Unmarshal(file, &emails); err != nil {
-		log.Printf("Warning: failed to parse notified emails file: %v", err)
+		log.Printf("[%s] Warning: failed to parse notified emails: %v", acc.Email, err)
 		return
 	}
 
 	for _, email := range emails {
-		notifiedEmails[email] = true
+		acc.notifiedEmails[email] = true
 	}
 }
 
-func cleanupOldNotifications() {
-	if len(notifiedEmails) > config.MaxHistory {
-		log.Printf("Cleaning up notification history (current: %d, max: %d)", len(notifiedEmails), config.MaxHistory)
-		// Keep only the most recent entries (simple approach - clear half)
+func cleanupOldNotifications(acc *AccountConfig) {
+	if len(acc.notifiedEmails) > acc.CheckHistory {
+		log.Printf("[%s] Cleaning up history (current: %d, max: %d)", acc.Email, len(acc.notifiedEmails), acc.CheckHistory)
 		count := 0
-		for k := range notifiedEmails {
-			if count > config.MaxHistory/2 {
+		for k := range acc.notifiedEmails {
+			if count > acc.CheckHistory/2 {
 				break
 			}
-			delete(notifiedEmails, k)
+			delete(acc.notifiedEmails, k)
 			count++
 		}
-		saveNotifiedEmails()
+		saveNotifiedEmails(acc)
 	}
 }
 
-func saveNotifiedEmails() error {
-	emails := make([]string, 0, len(notifiedEmails))
-	for email := range notifiedEmails {
+func saveNotifiedEmails(acc *AccountConfig) error {
+	acc.mu.RLock()
+	emails := make([]string, 0, len(acc.notifiedEmails))
+	for email := range acc.notifiedEmails {
 		emails = append(emails, email)
 	}
+	acc.mu.RUnlock()
 
 	data, err := json.MarshalIndent(emails, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal emails: %v", err)
+		return err
 	}
 
-	if err := os.WriteFile(notifiedEmailsFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %v", err)
-	}
-
-	return nil
+	filename := fmt.Sprintf("%s/%s.json", notifiedEmailsDir, sanitizeFilename(acc.Email))
+	return os.WriteFile(filename, data, 0644)
 }
 
-func showNotification(env *imap.Envelope) {
+func sanitizeFilename(s string) string {
+	return strings.ReplaceAll(s, "@", "_at_")
+}
+
+func showNotification(acc *AccountConfig, env *imap.Envelope) {
 	var sender string
 	if len(env.From) > 0 {
 		if env.From[0].MailboxName != "" && env.From[0].HostName != "" {
@@ -395,34 +574,29 @@ func showNotification(env *imap.Envelope) {
 		subject = "(No Subject)"
 	}
 
-	// Truncate long subjects for notification
-	if len(subject) > 50 {
-		subject = subject[:47] + "..."
+	// Truncate long subjects
+	displaySubject := subject
+	if len(displaySubject) > 50 {
+		displaySubject = displaySubject[:47] + "..."
 	}
 
-	message := fmt.Sprintf("From: %s\nSubject: %s", sender, subject)
+	title := fmt.Sprintf("📧 %s", acc.Email)
+	message := fmt.Sprintf("From: %s\nSubject: %s", sender, displaySubject)
 
-	// Send system notification
 	var err error
-	if config.NotificationSound {
-		err = beeep.Notify("📧 New Email", message, "")
+	if acc.EnableNotificationSound {
+		err = beeep.Notify(title, message, "")
 	} else {
-		err = beeep.Alert("📧 New Email", message, "")
+		err = beeep.Alert(title, message, "")
 	}
 
 	if err != nil {
-		log.Printf("Failed to send notification: %v", err)
+		log.Printf("[%s] Failed to send notification: %v", acc.Email, err)
 	}
 
-	// Log to console and file
-	log.Printf("NEW EMAIL - From: %s | Subject: %s", sender, subject)
-	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("📧 NEW EMAIL NOTIFICATION")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Printf("From: %s\n", sender)
-	fmt.Printf("Subject: %s\n", env.Subject)
-	fmt.Printf("Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	log.Printf("[%s] NEW EMAIL - From: %s | Subject: %s", acc.Email, sender, subject)
+	fmt.Printf("\n[%s] 📧 NEW EMAIL\n", acc.Email)
+	fmt.Printf("From: %s\nSubject: %s\nTime: %s\n\n", sender, subject, time.Now().Format("15:04:05"))
 }
 
 func getIconData() []byte {
@@ -431,7 +605,6 @@ func getIconData() []byte {
 		return icon
 	}
 
-	// Simple mail icon
 	return []byte{
 		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
 		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x16,

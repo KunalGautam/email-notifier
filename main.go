@@ -283,13 +283,6 @@ func checkNewEmails(acc *AccountConfig) error {
 		return fmt.Errorf("failed to select INBOX: %v", err)
 	}
 
-	// Update status
-	acc.mu.Lock()
-	acc.lastCheckTime = time.Now()
-	acc.unreadCount = int(mbox.Unseen)
-	acc.mu.Unlock()
-	updateAccountMenuItem(acc)
-
 	if mbox.Messages == 0 {
 		return nil
 	}
@@ -305,6 +298,14 @@ func checkNewEmails(acc *AccountConfig) error {
 	if len(ids) == 0 {
 		return nil
 	}
+
+	// Update status
+	acc.mu.Lock()
+	acc.lastCheckTime = time.Now()
+	acc.unreadCount = len(ids)
+	fmt.Println(acc.unreadCount)
+	acc.mu.Unlock()
+	updateAccountMenuItem(acc)
 
 	// Fetch headers
 	seqset := new(imap.SeqSet)

@@ -5,3 +5,4 @@ email-notifier.exe
 *.log
 notification_history/
 config.json
+folders_list.json

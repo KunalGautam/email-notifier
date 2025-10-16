@@ -1,3 +1,4 @@
 .env
 notified_emails.json
-email-notifier.log
+email-notifier
+email-monitor.log

@@ -78,7 +78,7 @@ func init() {
 
 func getAppDir() (string, error) {
 	var baseDir string
-	
+
 	// Get OS-specific config directory
 	switch {
 	case os.Getenv("XDG_CONFIG_HOME") != "":
@@ -208,11 +208,11 @@ func createSampleConfig() error {
 	log.Printf("Created sample config file: %s", configFile)
 	fmt.Printf("✅ Sample config created: %s\n", configFile)
 	fmt.Printf("Please edit it with your email settings and restart.\n")
-	
+
 	// Show notification with config path
-	beeep.Notify("Email Monitor - Setup Required", 
+	beeep.Notify("Email Monitor - Setup Required",
 		fmt.Sprintf("Config file created at:\n%s\n\nPlease edit and restart.", configFile), "")
-	
+
 	os.Exit(0)
 	return nil
 }
@@ -240,11 +240,11 @@ func onReady() {
 
 	mCheckAll := systray.AddMenuItem("🔍 Check All Now", "Check all accounts immediately")
 	mClearHistory := systray.AddMenuItem("🗑️  Clear All History", "Clear notification history for all accounts")
-	
+
 	mFolders := systray.AddMenuItem("📁 Folder Management", "Manage email folders")
 	mListFolders := mFolders.AddSubMenuItem("📋 List All Folders", "Get list of all folders from all accounts")
 	mViewFolderList := mFolders.AddSubMenuItem("👁️  View Saved Folder List", "View previously saved folder list")
-	
+
 	mRestart := systray.AddMenuItem("🔄 Restart Monitor", "Restart email monitoring")
 	mReloadConfig := systray.AddMenuItem("⚙️  Reload Config", "Reload configuration file")
 
@@ -343,7 +343,7 @@ func checkNewEmails(acc *AccountConfig) error {
 	defer c.Logout()
 
 	folders := getFoldersToCheck(acc, c)
-	
+
 	totalUnread := 0
 	newNotifications := false
 
@@ -537,7 +537,7 @@ func viewSavedFolderList() {
 	}
 
 	message := fmt.Sprintf("Folder list location:\n%s\n\n", foldersListFile)
-	
+
 	for _, info := range allFolders {
 		message += fmt.Sprintf("%s (%d folders):\n", info.Account, len(info.Folders))
 		for i, folder := range info.Folders {
@@ -834,10 +834,4 @@ func getIconData() []byte {
 		0x00, 0x00, 0xF8, 0x00, 0x35, 0x99, 0x0F, 0x64, 0xBA, 0xDF, 0x42, 0x00,
 		0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 	}
-}89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x16,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0xC4, 0xB4, 0x6C, 0x3B, 0x00, 0x00, 0x00,
-		0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00, 0x0B, 0x13, 0x00, 0x00, 0x0B,
-		0x13, 0x01, 0x00, 0x9A, 0x9C, 0x18, 0x00, 0x00, 0x00, 0xDA, 0x49, 0x44,
-		0x41, 0x54, 0x48, 0x4B, 0xED, 0x95, 0x4D, 0x0A, 0x82, 0x40, 0x10, 0x46,
-		0x
+}

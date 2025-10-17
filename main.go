@@ -30,7 +30,7 @@ type AccountConfig struct {
 	CheckInterval           int      `json:"check_interval"`
 	CheckHistory            int      `json:"check_history"`
 	EnableNotificationSound bool     `json:"enable_notification_sound"`
-	FolderMode              string   `json:"folder_mode"` // "all", "include", "exclude"
+	FolderMode              string   `json:"folder_mode"`
 	IncludeFolders          []string `json:"include_folders"`
 	ExcludeFolders          []string `json:"exclude_folders"`
 	notifiedEmails          map[string]bool
@@ -45,27 +45,77 @@ type Config struct {
 	Accounts []AccountConfig `json:"accounts"`
 }
 
-const (
-	configFile        = "config.json"
-	notifiedEmailsDir = "notification_history"
-	logFile           = "email-monitor.log"
-	foldersListFile   = "folders_list.json"
-)
-
 var (
 	config           Config
 	accountMenuItems map[string]*systray.MenuItem
 	mu               sync.RWMutex
+	appDir           string
+	configFile       string
+	logFile          string
+	foldersListFile  string
+	historyDir       string
 )
+
+func init() {
+	// Get OS-specific application directory
+	var err error
+	appDir, err = getAppDir()
+	if err != nil {
+		log.Fatalf("Failed to get application directory: %v", err)
+	}
+
+	// Create application directory if it doesn't exist
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		log.Fatalf("Failed to create application directory: %v", err)
+	}
+
+	// Set file paths
+	configFile = filepath.Join(appDir, "config.json")
+	logFile = filepath.Join(appDir, "email-monitor.log")
+	foldersListFile = filepath.Join(appDir, "folders_list.json")
+	historyDir = filepath.Join(appDir, "notification_history")
+}
+
+func getAppDir() (string, error) {
+	var baseDir string
+	
+	// Get OS-specific config directory
+	switch {
+	case os.Getenv("XDG_CONFIG_HOME") != "":
+		// Linux with XDG
+		baseDir = os.Getenv("XDG_CONFIG_HOME")
+	case os.Getenv("APPDATA") != "":
+		// Windows
+		baseDir = os.Getenv("APPDATA")
+	case os.Getenv("HOME") != "":
+		// macOS and Linux fallback
+		home := os.Getenv("HOME")
+		if _, err := os.Stat(filepath.Join(home, "Library")); err == nil {
+			// macOS
+			baseDir = filepath.Join(home, "Library", "Application Support")
+		} else {
+			// Linux fallback
+			baseDir = filepath.Join(home, ".config")
+		}
+	default:
+		return "", fmt.Errorf("unable to determine user config directory")
+	}
+
+	return filepath.Join(baseDir, "email-monitor"), nil
+}
 
 func main() {
 	setupLogging()
+
+	log.Printf("Application directory: %s", appDir)
+	fmt.Printf("📁 Email Monitor\n")
+	fmt.Printf("Application directory: %s\n\n", appDir)
 
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
 
-	os.MkdirAll(notifiedEmailsDir, 0755)
+	os.MkdirAll(historyDir, 0755)
 
 	for i := range config.Accounts {
 		config.Accounts[i].notifiedEmails = make(map[string]bool)
@@ -156,7 +206,13 @@ func createSampleConfig() error {
 	}
 
 	log.Printf("Created sample config file: %s", configFile)
-	fmt.Printf("Sample config created: %s\nPlease edit it with your email settings and restart.\n", configFile)
+	fmt.Printf("✅ Sample config created: %s\n", configFile)
+	fmt.Printf("Please edit it with your email settings and restart.\n")
+	
+	// Show notification with config path
+	beeep.Notify("Email Monitor - Setup Required", 
+		fmt.Sprintf("Config file created at:\n%s\n\nPlease edit and restart.", configFile), "")
+	
 	os.Exit(0)
 	return nil
 }
@@ -194,7 +250,8 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mViewLogs := systray.AddMenuItem("📄 View Logs Location", "Show log file path")
+	mViewFiles := systray.AddMenuItem("📂 Open App Directory", "Open application directory in file manager")
+	mViewLogs := systray.AddMenuItem("📄 View File Locations", "Show file paths")
 	mExit := systray.AddMenuItem("❌ Exit", "Exit the application")
 
 	for i := range config.Accounts {
@@ -227,6 +284,9 @@ func onReady() {
 			case <-mReloadConfig.ClickedCh:
 				log.Println("Reloading configuration...")
 				reloadConfiguration()
+
+			case <-mViewFiles.ClickedCh:
+				openAppDirectory()
 
 			case <-mViewLogs.ClickedCh:
 				showFilePaths()
@@ -385,7 +445,7 @@ func getFoldersToCheck(acc *AccountConfig, c *client.Client) []string {
 			}
 		}
 		return result
-	default: // "all"
+	default:
 		return listFolders(c)
 	}
 }
@@ -436,7 +496,6 @@ func listAllFolders() {
 		log.Printf("[%s] Found %d folders", acc.Email, len(folders))
 	}
 
-	// Save to JSON file
 	data, err := json.MarshalIndent(allFolders, "", "  ")
 	if err != nil {
 		log.Printf("Failed to marshal folder list: %v", err)
@@ -450,18 +509,8 @@ func listAllFolders() {
 		return
 	}
 
-	// Create notification message
-	absPath, _ := filepath.Abs(foldersListFile)
-	message := fmt.Sprintf("Folder list saved to:\n%s\n\nTotal accounts: %d", absPath, len(allFolders))
-	
+	message := fmt.Sprintf("Folder list saved to:\n%s\n\nTotal accounts: %d", foldersListFile, len(allFolders))
 	beeep.Notify("📁 Folder List Saved", message, "")
-	
-	// Also show summary
-	summary := "Folders per account:\n"
-	for _, info := range allFolders {
-		summary += fmt.Sprintf("\n%s: %d folders", info.Account, len(info.Folders))
-	}
-	log.Println(summary)
 }
 
 func viewSavedFolderList() {
@@ -487,40 +536,42 @@ func viewSavedFolderList() {
 		return
 	}
 
-	absPath, _ := filepath.Abs(foldersListFile)
-	message := fmt.Sprintf("Folder list location:\n%s\n\n", absPath)
+	message := fmt.Sprintf("Folder list location:\n%s\n\n", foldersListFile)
 	
 	for _, info := range allFolders {
 		message += fmt.Sprintf("%s (%d folders):\n", info.Account, len(info.Folders))
-		for _, folder := range info.Folders {
+		for i, folder := range info.Folders {
+			if i >= 5 {
+				message += fmt.Sprintf("  ... and %d more\n", len(info.Folders)-5)
+				break
+			}
 			message += fmt.Sprintf("  • %s\n", folder)
 		}
 		message += "\n"
-	}
-
-	// Truncate if too long
-	if len(message) > 500 {
-		message = message[:497] + "..."
 	}
 
 	beeep.Notify("📁 Saved Folder List", message, "")
 }
 
 func showFilePaths() {
-	logPath, _ := filepath.Abs(logFile)
-	configPath, _ := filepath.Abs(configFile)
-	folderListPath, _ := filepath.Abs(foldersListFile)
-	historyPath, _ := filepath.Abs(notifiedEmailsDir)
-
 	message := fmt.Sprintf(
-		"Config: %s\n\nLog: %s\n\nFolder List: %s\n\nHistory: %s",
-		configPath,
-		logPath,
-		folderListPath,
-		historyPath,
+		"Application Directory:\n%s\n\nConfig: %s\n\nLog: %s\n\nFolder List: %s\n\nHistory: %s",
+		appDir,
+		configFile,
+		logFile,
+		foldersListFile,
+		historyDir,
 	)
 
 	beeep.Notify("📂 File Locations", message, "")
+}
+
+func openAppDirectory() {
+	// This will show a notification with the path
+	// Users can manually open it from there
+	message := fmt.Sprintf("Application directory:\n%s\n\nOpen this location in your file manager.", appDir)
+	beeep.Notify("📂 Application Directory", message, "")
+	log.Printf("App directory requested: %s", appDir)
 }
 
 func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
@@ -657,7 +708,7 @@ func generateEmailID(folder string, uid uint32, messageID string) string {
 }
 
 func loadNotifiedEmails(acc *AccountConfig) {
-	filename := fmt.Sprintf("%s/%s.json", notifiedEmailsDir, sanitizeFilename(acc.Email))
+	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
 	file, err := os.ReadFile(filename)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -705,7 +756,7 @@ func saveNotifiedEmails(acc *AccountConfig) error {
 		return err
 	}
 
-	filename := fmt.Sprintf("%s/%s.json", notifiedEmailsDir, sanitizeFilename(acc.Email))
+	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
 	return os.WriteFile(filename, data, 0644)
 }
 
@@ -757,18 +808,13 @@ func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 }
 
 func getIconData() []byte {
-	icon, err := os.ReadFile("icon.png")
+	iconPath := filepath.Join(appDir, "icon.png")
+	icon, err := os.ReadFile(iconPath)
 	if err == nil {
 		return icon
 	}
 
 	return []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x16,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0xC4, 0xB4, 0x6C, 0x3B, 0x00, 0x00, 0x00,
-		0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00, 0x0B, 0x13, 0x00, 0x00, 0x0B,
-		0x13, 0x01, 0x00, 0x9A, 0x9C, 0x18, 0x00, 0x00, 0x00, 0xDA, 0x49, 0x44,
-		0x41, 0x54, 0x48, 0x4B, 0xED, 0x95, 0x4D, 0x0A, 0x82, 0x40, 0x10, 0x46,
 		0xDF, 0x9A, 0xB4, 0x87, 0xE0, 0x0D, 0xBC, 0x86, 0x17, 0xF0, 0x1A, 0x5E,
 		0xC2, 0x95, 0xBC, 0x80, 0xE0, 0x0D, 0x3C, 0x80, 0x17, 0x50, 0xA8, 0x20,
 		0x08, 0x82, 0x20, 0x08, 0x82, 0x68, 0x30, 0x99, 0x49, 0x67, 0x32, 0x99,
@@ -788,4 +834,10 @@ func getIconData() []byte {
 		0x00, 0x00, 0xF8, 0x00, 0x35, 0x99, 0x0F, 0x64, 0xBA, 0xDF, 0x42, 0x00,
 		0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 	}
-}
+}89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x16,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0xC4, 0xB4, 0x6C, 0x3B, 0x00, 0x00, 0x00,
+		0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00, 0x0B, 0x13, 0x00, 0x00, 0x0B,
+		0x13, 0x01, 0x00, 0x9A, 0x9C, 0x18, 0x00, 0x00, 0x00, 0xDA, 0x49, 0x44,
+		0x41, 0x54, 0x48, 0x4B, 0xED, 0x95, 0x4D, 0x0A, 0x82, 0x40, 0x10, 0x46,
+		0x

@@ -563,19 +563,19 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 </div>
                 <div class="form-group">
                     <label>IMAP Server</label>
-                    <input type="text" id="server" required>
+                    <input type="text" id="addServer" required>
                 </div>
                 <div class="form-group">
                     <label>Port</label>
-                    <input type="number" id="port" value="993" required>
+                    <input type="number" id="addPort" value="993" required>
                 </div>
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="username" required>
+                    <input type="text" id="addUsername" required>
                 </div>
                 <div class="form-group">
                     <label>Password <span class="keyring-badge">🔒 Secure</span></label>
-                    <input type="password" id="password" required>
+                    <input type="password" id="addPassword" required>
                     <small style="color:#666;">Password will be stored securely in system keyring</small>
                 </div>
                 <div class="form-group">
@@ -584,28 +584,28 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 </div>
                 <div class="form-group">
                     <label>Folder Mode</label>
-                    <select id="folderMode" onchange="toggleFolderInputs()">
+                    <select id="addFolderMode" onchange="toggleFolderInputs()">
                         <option value="all">All Folders</option>
                         <option value="include">Include Specific Folders</option>
                         <option value="exclude">Exclude Specific Folders</option>
                     </select>
                 </div>
-                <div class="form-group" id="fetchFoldersGroup">
+                <div class="form-group" id="addFetchFoldersGroup" style="display:none;">
                     <button type="button" class="btn btn-primary" onclick="fetchFolders('add')" style="width:100%;">
                         📁 Fetch Folders from Server
                     </button>
                     <small style="color:#666;">Click to retrieve available folders and select them</small>
                 </div>
-                <div class="form-group" id="includeFoldersGroup" style="display:none;">
+                <div class="form-group" id="addIncludeFoldersGroup" style="display:none;">
                     <label>Include Folders</label>
-                    <div id="includeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="includeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    <div id="addIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="addIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
                     </div>
                 </div>
-                <div class="form-group" id="excludeFoldersGroup" style="display:none;">
+                <div class="form-group" id="addExcludeFoldersGroup" style="display:none;">
                     <label>Exclude Folders</label>
-                    <div id="excludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="excludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    <div id="addExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="addExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
@@ -649,32 +649,31 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <input type="number" id="editInterval" required>
                 </div>
                 <div class="form-group">
-                                    <label>Folder Mode</label>
-                                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
-                                        <option value="all">All Folders</option>
-                                        <option value="include">Include Specific</option>
-                                        <option value="exclude">Exclude Specific</option>
-                                    </select>
-                                </div>
-                                <div class="form-group" id="editFetchFoldersGroup" style="display:none;">
-                                    <button type="button" class="btn btn-primary" onclick="fetchFolders('edit')" style="width:100%;">
-                                        🔍 Fetch Folders from Server
-                                    </button>
-                                    <small style="color:#666;">Click to retrieve available folders and select them</small>
-                                </div>
-                                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
-                                    <label>Include Folders</label>
-                                    <div id="editIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                                        <input type="text" id="editIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
-                                    </div>
-                                </div>
-                                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
-                                    <label>Exclude Folders</label>
-                                    <div id="editExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                                        <input type="text" id="editExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
-                                    </div>
-                                </div>
-
+                    <label>Folder Mode</label>
+                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
+                        <option value="all">All Folders</option>
+                        <option value="include">Include Specific</option>
+                        <option value="exclude">Exclude Specific</option>
+                    </select>
+                </div>
+                <div class="form-group" id="editFetchFoldersGroup" style="display:none;">
+                    <button type="button" class="btn btn-primary" onclick="fetchFolders('edit')" style="width:100%;">
+                        📁 Fetch Folders from Server
+                    </button>
+                    <small style="color:#666;">Click to retrieve available folders and select them</small>
+                </div>
+                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
+                    <label>Include Folders</label>
+                    <div id="editIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="editIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    </div>
+                </div>
+                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
+                    <label>Exclude Folders</label>
+                    <div id="editExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="editExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    </div>
+                </div>
 
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="submit" class="btn btn-success">Save</button>
@@ -691,10 +690,10 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         let currentFormType = '';
 
         function toggleFolderInputs() {
-            const mode = document.getElementById('folderMode').value;
-            document.getElementById('includeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
-            document.getElementById('excludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
-            document.getElementById('fetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
+            const mode = document.getElementById('addFolderMode').value;
+            document.getElementById('addIncludeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
+            document.getElementById('addExcludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
+            document.getElementById('addFetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
         }
 
         function toggleEditFolderInputs() {
@@ -706,15 +705,37 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         async function fetchFolders(formType) {
             currentFormType = formType;
-            const prefix = formType === 'edit' ? 'edit' : '';
+            const prefix = formType === 'edit' ? 'edit' : 'add';
 
-            const server = document.getElementById(prefix + 'Server').value;
-            const port = parseInt(document.getElementById(prefix + 'Port').value);
-            const username = document.getElementById(prefix + 'Username').value;
-            const password = document.getElementById(prefix + 'Password').value;
+      		const serverEl = document.getElementById(prefix + 'Server');
+            const portEl = document.getElementById(prefix + 'Port');
+            const usernameEl = document.getElementById(prefix + 'Username');
+            const passwordEl = document.getElementById(prefix + 'Password');
 
-            if (!server || !port || !username || !password) {
-                showToast('Please fill in server, port, username, and password first', 'error');
+
+
+            if (!serverEl || !portEl || !usernameEl || !passwordEl) {
+                showToast('Form fields not found', 'error');
+                return;
+            }
+
+            const server = serverEl.value;
+            const port = parseInt(portEl.value);
+            const username = usernameEl.value;
+            const password = passwordEl.value;
+
+            if (!server || !port || !username) {
+                showToast('Please fill in server, port, and username first', 'error');
+                return;
+            }
+
+            if (formType === 'add' && !password) {
+                showToast('Please enter password for new account', 'error');
+                return;
+            }
+
+            if (formType === 'edit' && !password) {
+                showToast('Please enter password to fetch folders', 'error');
                 return;
             }
 
@@ -742,7 +763,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         }
 
         function displayFolderCheckboxes(formType) {
-            const prefix = formType === 'edit' ? 'edit' : '';
+            const prefix = formType === 'edit' ? 'edit' : 'add';
             const mode = document.getElementById(prefix + 'FolderMode').value;
 
             if (mode === 'all') return;
@@ -791,7 +812,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         }
 
         function updateFolderInput(formType, mode) {
-            const prefix = formType === 'edit' ? 'edit' : '';
+            const prefix = formType === 'edit' ? 'edit' : 'add';
             const checkboxes = document.querySelectorAll(` + "`" + `input[type="checkbox"][id^="folder_${formType}_"]:checked` + "`" + `);
             const selected = Array.from(checkboxes).map(cb => cb.value);
 
@@ -824,6 +845,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         function showAddModal() {
             document.getElementById('addModal').style.display = 'block';
+            // Reset form and visibility
+            document.getElementById('addForm').reset();
+            toggleFolderInputs();
         }
 
         function closeModal() {
@@ -859,14 +883,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             e.preventDefault();
             const data = {
                 email: document.getElementById('email').value,
-                server: document.getElementById('server').value,
-                port: parseInt(document.getElementById('port').value),
-                username: document.getElementById('username').value,
-                password: document.getElementById('password').value,
+                server: document.getElementById('addServer').value,
+                port: parseInt(document.getElementById('addPort').value),
+                username: document.getElementById('addUsername').value,
+                password: document.getElementById('addPassword').value,
                 check_interval: parseInt(document.getElementById('interval').value),
-                folder_mode: document.getElementById('folderMode').value,
-                include_folders: document.getElementById('includeFolders').value.split(',').map(s => s.trim()).filter(s => s),
-                exclude_folders: document.getElementById('excludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
+                folder_mode: document.getElementById('addFolderMode').value,
+                include_folders: document.getElementById('addIncludeFolders').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_folders: document.getElementById('addExcludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
             };
 
             try {

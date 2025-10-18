@@ -19,6 +19,11 @@ import (
 	"github.com/emersion/go-imap/client"
 	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
+	"github.com/zalando/go-keyring"
+)
+
+const (
+	keyringService = "email-monitor"
 )
 
 type AccountConfig struct {
@@ -26,7 +31,7 @@ type AccountConfig struct {
 	Server                  string   `json:"server"`
 	Port                    int      `json:"port"`
 	Username                string   `json:"username"`
-	Password                string   `json:"password"`
+	Password                string   `json:"password,omitempty"` // Legacy, not saved anymore
 	Protocol                string   `json:"protocol"`
 	IncludeKeyword          []string `json:"include_keyword"`
 	ExcludeKeyword          []string `json:"exclude_keyword"`
@@ -85,11 +90,9 @@ func getAppDir() (string, error) {
 	var baseDir string
 	home := os.Getenv("HOME")
 
-	// Check XDG_CONFIG_HOME first (takes precedence on all platforms)
 	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
 		baseDir = xdgConfig
 	} else {
-		// Fall back to OS-specific defaults
 		switch oss {
 		case "darwin":
 			baseDir = filepath.Join(home, "Library", "Application Support")
@@ -105,16 +108,54 @@ func getAppDir() (string, error) {
 	return filepath.Join(baseDir, "email-monitor"), nil
 }
 
+// Keyring helper functions
+func setPassword(email, password string) error {
+	return keyring.Set(keyringService, email, password)
+}
+
+func getPassword(email string) (string, error) {
+	return keyring.Get(keyringService, email)
+}
+
+func deletePassword(email string) error {
+	return keyring.Delete(keyringService, email)
+}
+
+func migratePasswordsToKeyring() {
+	migrated := false
+	for i := range config.Accounts {
+		if config.Accounts[i].Password != "" {
+			// Migrate plain text password to keyring
+			if err := setPassword(config.Accounts[i].Email, config.Accounts[i].Password); err != nil {
+				log.Printf("[%s] Failed to migrate password to keyring: %v", config.Accounts[i].Email, err)
+			} else {
+				log.Printf("[%s] Migrated password to keyring", config.Accounts[i].Email)
+				config.Accounts[i].Password = "" // Clear from config
+				migrated = true
+			}
+		}
+	}
+	
+	if migrated {
+		if err := saveConfig(); err != nil {
+			log.Printf("Failed to save config after migration: %v", err)
+		}
+	}
+}
+
 func main() {
 	setupLogging()
 
 	log.Printf("Application directory: %s", appDir)
-	fmt.Printf("📁 Email Monitor\n")
+	fmt.Printf("📧 Email Monitor\n")
 	fmt.Printf("Application directory: %s\n\n", appDir)
 
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
+
+	// Migrate any plain text passwords to keyring
+	migratePasswordsToKeyring()
 
 	os.MkdirAll(historyDir, 0755)
 
@@ -127,7 +168,6 @@ func main() {
 
 	log.Printf("Starting email monitor for %d accounts", len(config.Accounts))
 
-	// Start web server on random port
 	go startWebServer()
 
 	systray.Run(onReady, onExit)
@@ -184,7 +224,6 @@ func createSampleConfig() error {
 				Server:                  "imap.example.com",
 				Port:                    993,
 				Username:                "user@example.com",
-				Password:                "your-password",
 				Protocol:                "imap",
 				IncludeKeyword:          []string{},
 				ExcludeKeyword:          []string{},
@@ -212,6 +251,7 @@ func createSampleConfig() error {
 	log.Printf("Created sample config file: %s", configFile)
 	fmt.Printf("✅ Sample config created: %s\n", configFile)
 	fmt.Printf("Please edit it with your email settings and restart.\n")
+	fmt.Printf("\nNote: Passwords are stored securely in your system's keyring, not in the config file.\n")
 
 	beeep.Notify("Email Monitor - Setup Required",
 		fmt.Sprintf("Config file created at:\n%s\n\nPlease edit and restart.", configFile), "")
@@ -221,7 +261,14 @@ func createSampleConfig() error {
 }
 
 func saveConfig() error {
-	data, err := json.MarshalIndent(config, "", "  ")
+	// Clear passwords before saving
+	configCopy := Config{Accounts: make([]AccountConfig, len(config.Accounts))}
+	for i, acc := range config.Accounts {
+		configCopy.Accounts[i] = acc
+		configCopy.Accounts[i].Password = "" // Never save password to file
+	}
+
+	data, err := json.MarshalIndent(configCopy, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -229,7 +276,6 @@ func saveConfig() error {
 }
 
 func startWebServer() {
-	// Find random available port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatal(err)
@@ -240,7 +286,6 @@ func startWebServer() {
 
 	log.Printf("Starting web server on %s", webServerURL)
 
-	// Setup routes
 	http.HandleFunc("/", handleHome)
 	http.HandleFunc("/api/accounts", handleAccounts)
 	http.HandleFunc("/api/accounts/add", handleAddAccount)
@@ -260,12 +305,10 @@ func onReady() {
 	systray.SetTitle("📧")
 	systray.SetTooltip(fmt.Sprintf("Email Monitor - Click to open"))
 
-	// Wait for web server to be ready
 	time.Sleep(500 * time.Millisecond)
 
 	systray.SetTooltip(fmt.Sprintf("Email Monitor\nClick to open dashboard\n%s", webServerURL))
 
-	// Add a click handler by creating a hidden menu item that opens browser
 	mOpen := systray.AddMenuItem("🖥️  Open Dashboard", "Open web dashboard")
 
 	go func() {
@@ -310,7 +353,6 @@ func openBrowser(url string) {
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
 	tmpl := template.Must(template.New("home").Parse(`
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -333,6 +375,15 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .header h1 { color: #333; margin-bottom: 10px; }
+        .security-note {
+            background: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 10px 15px;
+            margin-top: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #2e7d32;
+        }
         .actions {
             display: flex;
             gap: 10px;
@@ -441,13 +492,25 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         .toast.show { display: block; }
         .toast.success { background: #28a745; }
         .toast.error { background: #dc3545; }
+        .keyring-badge {
+            display: inline-block;
+            background: #4caf50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>Email Monitor Dashboard</h1>
-            <p>Application Directory: ` + appDir + `</p>
+            <div class="security-note">
+                🔒 <strong>Secure Storage:</strong> Passwords are stored in your system's keyring (not in config files)
+            </div>
+            <p style="margin-top: 10px;">Application Directory: {{.AppDir}}</p>
             <div class="actions">
                 <button class="btn btn-primary" onclick="showAddModal()">Add Account</button>
                 <button class="btn btn-success" onclick="checkAll()">Check All Now</button>
@@ -489,8 +552,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <input type="text" id="username" required>
                 </div>
                 <div class="form-group">
-                    <label>Password</label>
+                    <label>Password <span class="keyring-badge">🔒 Secure</span></label>
                     <input type="password" id="password" required>
+                    <small style="color:#666;">Password will be stored securely in system keyring</small>
                 </div>
                 <div class="form-group">
                     <label>Check Interval (seconds)</label>
@@ -507,12 +571,10 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 <div class="form-group" id="includeFoldersGroup" style="display:none;">
                     <label>Include Folders (comma-separated)</label>
                     <input type="text" id="includeFolders" placeholder="INBOX, Work, Important">
-                    <small style="color:#666;">Example: INBOX, Work, Important</small>
                 </div>
                 <div class="form-group" id="excludeFoldersGroup" style="display:none;">
                     <label>Exclude Folders (comma-separated)</label>
                     <input type="text" id="excludeFolders" placeholder="Spam, Trash, Drafts">
-                    <small style="color:#666;">Example: Spam, Trash, Drafts</small>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="button" class="btn btn-primary" onclick="testConnection()">Test Connection</button>
@@ -530,7 +592,8 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 <input type="hidden" id="editIndex">
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" id="editEmail" required>
+                    <input type="email" id="editEmail" required readonly style="background:#f5f5f5;">
+                    <small style="color:#666;">Email cannot be changed (used as keyring identifier)</small>
                 </div>
                 <div class="form-group">
                     <label>IMAP Server</label>
@@ -545,8 +608,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <input type="text" id="editUsername" required>
                 </div>
                 <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="editPassword" required>
+                    <label>Password <span class="keyring-badge">🔒 Secure</span></label>
+                    <input type="password" id="editPassword" placeholder="Leave empty to keep existing">
+                    <small style="color:#666;">Leave empty to keep current password</small>
                 </div>
                 <div class="form-group">
                     <label>Check Interval (seconds)</label>
@@ -563,12 +627,10 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
                     <label>Include Folders (comma-separated)</label>
                     <input type="text" id="editIncludeFolders" placeholder="INBOX, Work, Important">
-                    <small style="color:#666;">Example: INBOX, Work, Important</small>
                 </div>
                 <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
                     <label>Exclude Folders (comma-separated)</label>
                     <input type="text" id="editExcludeFolders" placeholder="Spam, Trash, Drafts">
-                    <small style="color:#666;">Example: Spam, Trash, Drafts</small>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="submit" class="btn btn-success">Save</button>
@@ -667,7 +729,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     body: JSON.stringify(data)
                 });
                 if (response.ok) {
-                    showToast('Account added successfully');
+                    showToast('Account added successfully (password stored securely)');
                     closeModal();
                     loadAccounts();
                 } else {
@@ -722,7 +784,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     document.getElementById('editServer').value = acc.server;
                     document.getElementById('editPort').value = acc.port;
                     document.getElementById('editUsername').value = acc.username;
-                    document.getElementById('editPassword').value = acc.password;
+                    document.getElementById('editPassword').value = ''; // Don't show password
                     document.getElementById('editInterval').value = acc.check_interval;
                     document.getElementById('editFolderMode').value = acc.folder_mode;
                     document.getElementById('editIncludeFolders').value = (acc.include_folders || []).join(', ');
@@ -733,7 +795,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         }
 
         async function deleteAccount(index) {
-            if (!confirm('Are you sure you want to delete this account?')) return;
+            if (!confirm('Are you sure you want to delete this account? This will also remove the password from keyring.')) return;
 
             try {
                 const response = await fetch('/api/accounts/delete', {
@@ -794,7 +856,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
                 container.innerHTML = accounts.map((acc, index) => ` + "`" + `
                     <div class="account-card">
-                        <h3>${acc.email}</h3>
+                        <h3>${acc.email} <span class="keyring-badge">🔒</span></h3>
                         <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
                         <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
                         <div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>
@@ -833,7 +895,6 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 		Server         string   `json:"server"`
 		Port           int      `json:"port"`
 		Username       string   `json:"username"`
-		Password       string   `json:"password"`
 		CheckInterval  int      `json:"check_interval"`
 		FolderMode     string   `json:"folder_mode"`
 		IncludeFolders []string `json:"include_folders"`
@@ -855,7 +916,6 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Server:         acc.Server,
 			Port:           acc.Port,
 			Username:       acc.Username,
-			Password:       acc.Password,
 			CheckInterval:  acc.CheckInterval,
 			FolderMode:     acc.FolderMode,
 			IncludeFolders: acc.IncludeFolders,
@@ -874,16 +934,25 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newAccount struct {
-		Email         string `json:"email"`
-		Server        string `json:"server"`
-		Port          int    `json:"port"`
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		CheckInterval int    `json:"check_interval"`
+		Email          string   `json:"email"`
+		Server         string   `json:"server"`
+		Port           int      `json:"port"`
+		Username       string   `json:"username"`
+		Password       string   `json:"password"`
+		CheckInterval  int      `json:"check_interval"`
+		FolderMode     string   `json:"folder_mode"`
+		IncludeFolders []string `json:"include_folders"`
+		ExcludeFolders []string `json:"exclude_folders"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&newAccount); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Store password in keyring
+	if err := setPassword(newAccount.Email, newAccount.Password); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to store password in keyring: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -892,18 +961,17 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		Server:                  newAccount.Server,
 		Port:                    newAccount.Port,
 		Username:                newAccount.Username,
-		Password:                newAccount.Password,
 		Protocol:                "imap",
 		CheckInterval:           newAccount.CheckInterval,
 		CheckHistory:            1000,
 		EnableNotificationSound: true,
-		FolderMode:              "all",
+		FolderMode:              newAccount.FolderMode,
+		IncludeFolders:          newAccount.IncludeFolders,
+		ExcludeFolders:          newAccount.ExcludeFolders,
 		IncludeKeyword:          []string{},
 		ExcludeKeyword:          []string{},
 		IncludeEmail:            []string{},
 		ExcludeEmail:            []string{},
-		IncludeFolders:          []string{},
-		ExcludeFolders:          []string{},
 		notifiedEmails:          make(map[string]bool),
 		stopChan:                make(chan bool),
 	}
@@ -915,7 +983,6 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start monitoring for new account
 	go startMonitoring(&config.Accounts[len(config.Accounts)-1])
 
 	w.WriteHeader(http.StatusOK)
@@ -952,11 +1019,18 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	acc := &config.Accounts[update.Index]
-	acc.Email = update.Email
+
+	// Update password in keyring if provided
+	if update.Password != "" {
+		if err := setPassword(acc.Email, update.Password); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to update password in keyring: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	acc.Server = update.Server
 	acc.Port = update.Port
 	acc.Username = update.Username
-	acc.Password = update.Password
 	acc.CheckInterval = update.CheckInterval
 	acc.FolderMode = update.FolderMode
 	acc.IncludeFolders = update.IncludeFolders
@@ -967,7 +1041,7 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Restart monitoring for this account
+	// Restart monitoring
 	acc.stopChan <- true
 	time.Sleep(100 * time.Millisecond)
 	acc.stopChan = make(chan bool)
@@ -997,8 +1071,15 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	email := config.Accounts[req.Index].Email
+
 	// Stop monitoring
 	config.Accounts[req.Index].stopChan <- true
+
+	// Delete password from keyring
+	if err := deletePassword(email); err != nil {
+		log.Printf("Failed to delete password from keyring: %v", err)
+	}
 
 	// Remove account
 	config.Accounts = append(config.Accounts[:req.Index], config.Accounts[req.Index+1:]...)
@@ -1210,12 +1291,18 @@ func checkNewEmails(acc *AccountConfig) error {
 }
 
 func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
+	// Get password from keyring
+	password, err := getPassword(acc.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get password from keyring: %v", err)
+	}
+
 	c, err := client.DialTLS(fmt.Sprintf("%s:%d", acc.Server, acc.Port), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := c.Login(acc.Username, acc.Password); err != nil {
+	if err := c.Login(acc.Username, password); err != nil {
 		c.Logout()
 		return nil, err
 	}

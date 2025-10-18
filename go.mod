@@ -6,10 +6,13 @@ require (
 	github.com/emersion/go-imap v1.2.1
 	github.com/gen2brain/beeep v0.11.1
 	github.com/getlantern/systray v1.2.2
+	github.com/zalando/go-keyring v0.2.6
 )
 
 require (
+	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+	github.com/danieljoos/wincred v1.2.2 // indirect
 	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect

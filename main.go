@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/emersion/go-imap/client"
 	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
+	"github.com/knadh/go-pop3"
 	"github.com/zalando/go-keyring"
 )
 
@@ -31,8 +33,8 @@ type AccountConfig struct {
 	Server                  string   `json:"server"`
 	Port                    int      `json:"port"`
 	Username                string   `json:"username"`
-	Password                string   `json:"password,omitempty"` // Legacy, not saved anymore
-	Protocol                string   `json:"protocol"`
+	Password                string   `json:"password,omitempty"`
+	Protocol                string   `json:"protocol"` // "imap" or "pop3"
 	IncludeKeyword          []string `json:"include_keyword"`
 	ExcludeKeyword          []string `json:"exclude_keyword"`
 	IncludeEmail            []string `json:"include_email"`
@@ -108,7 +110,6 @@ func getAppDir() (string, error) {
 	return filepath.Join(baseDir, "email-monitor"), nil
 }
 
-// Keyring helper functions
 func setPassword(email, password string) error {
 	return keyring.Set(keyringService, email, password)
 }
@@ -125,12 +126,11 @@ func migratePasswordsToKeyring() {
 	migrated := false
 	for i := range config.Accounts {
 		if config.Accounts[i].Password != "" {
-			// Migrate plain text password to keyring
 			if err := setPassword(config.Accounts[i].Email, config.Accounts[i].Password); err != nil {
 				log.Printf("[%s] Failed to migrate password to keyring: %v", config.Accounts[i].Email, err)
 			} else {
 				log.Printf("[%s] Migrated password to keyring", config.Accounts[i].Email)
-				config.Accounts[i].Password = "" // Clear from config
+				config.Accounts[i].Password = ""
 				migrated = true
 			}
 		}
@@ -147,14 +147,13 @@ func main() {
 	setupLogging()
 
 	log.Printf("Application directory: %s", appDir)
-	fmt.Printf("📧 Email Monitor\n")
+	fmt.Printf("📧 Email Monitor (IMAP & POP3)\n")
 	fmt.Printf("Application directory: %s\n\n", appDir)
 
 	if err := loadConfig(); err != nil {
 		log.Fatal(err)
 	}
 
-	// Migrate any plain text passwords to keyring
 	migratePasswordsToKeyring()
 
 	os.MkdirAll(historyDir, 0755)
@@ -252,6 +251,7 @@ func createSampleConfig() error {
 	fmt.Printf("✅ Sample config created: %s\n", configFile)
 	fmt.Printf("Please edit it with your email settings and restart.\n")
 	fmt.Printf("\nNote: Passwords are stored securely in your system's keyring, not in the config file.\n")
+	fmt.Printf("Supported protocols: IMAP and POP3\n")
 
 	beeep.Notify("Email Monitor - Setup Required",
 		fmt.Sprintf("Config file created at:\n%s\n\nPlease edit and restart.", configFile), "")
@@ -261,11 +261,10 @@ func createSampleConfig() error {
 }
 
 func saveConfig() error {
-	// Clear passwords before saving
 	configCopy := Config{Accounts: make([]AccountConfig, len(config.Accounts))}
 	for i, acc := range config.Accounts {
 		configCopy.Accounts[i] = acc
-		configCopy.Accounts[i].Password = "" // Never save password to file
+		configCopy.Accounts[i].Password = ""
 	}
 
 	data, err := json.MarshalIndent(configCopy, "", "  ")
@@ -308,9 +307,9 @@ func onReady() {
 
 	time.Sleep(500 * time.Millisecond)
 
-	systray.SetTooltip(fmt.Sprintf("Email Monitor\nClick to open dashboard\n%s", webServerURL))
+	systray.SetTooltip(fmt.Sprintf("Email Monitor (IMAP & POP3)\nClick to open dashboard\n%s", webServerURL))
 
-	mOpen := systray.AddMenuItem("🖥️  Open Dashboard", "Open web dashboard")
+	mOpen := systray.AddMenuItem("🖥️ Open Dashboard", "Open web dashboard")
 
 	go func() {
 		for {
@@ -376,6 +375,16 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .header h1 { color: #333; margin-bottom: 10px; }
+        .protocol-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .protocol-imap { background: #2196f3; color: white; }
+        .protocol-pop3 { background: #ff9800; color: white; }
         .security-note {
             background: #e8f5e9;
             border-left: 4px solid #4caf50;
@@ -502,26 +511,17 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             font-size: 11px;
             margin-left: 8px;
         }
-        .folder-checkbox {
-            display: block;
-            padding: 5px;
-            margin: 3px 0;
+        .protocol-note {
+            background: #fff3cd;
+            border-left: 4px solid #ff9800;
+            padding: 10px 15px;
+            margin-top: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #856404;
         }
-        .folder-checkbox input {
-            margin-right: 8px;
-            width: auto;
-        }
-        .folder-checkbox label {
-            display: inline;
-            margin: 0;
-            cursor: pointer;
-            font-weight: normal;
-        }
-        .folder-list-container {
+        #folderSettings {
             display: none;
-        }
-        .folder-list-container.show {
-            display: block;
         }
     </style>
 </head>
@@ -532,7 +532,8 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             <div class="security-note">
                 🔒 <strong>Secure Storage:</strong> Passwords are stored in your system's keyring (not in config files)
             </div>
-            <p style="margin-top: 10px;">Application Directory: {{.AppDir}}</p>
+            <p style="margin-top: 10px;"><strong>Supported Protocols:</strong> <span class="protocol-badge protocol-imap">IMAP</span> <span class="protocol-badge protocol-pop3">POP3</span></p>
+            <p style="margin-top: 5px;">Application Directory: {{.AppDir}}</p>
             <div class="actions">
                 <button class="btn btn-primary" onclick="showAddModal()">Add Account</button>
                 <button class="btn btn-success" onclick="checkAll()">Check All Now</button>
@@ -549,6 +550,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             <h2>Add Account</h2>
             <form id="addForm">
                 <div class="form-group">
+                    <label>Protocol</label>
+                    <select id="protocol" onchange="updateProtocolSettings()">
+                        <option value="imap">IMAP (recommended)</option>
+                        <option value="pop3">POP3</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label>Provider</label>
                     <select id="provider" onchange="setProvider()">
                         <option value="custom">Custom</option>
@@ -562,50 +570,37 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <input type="email" id="email" required>
                 </div>
                 <div class="form-group">
-                    <label>IMAP Server</label>
-                    <input type="text" id="addServer" required>
+                    <label id="serverLabel">Server</label>
+                    <input type="text" id="server" required>
                 </div>
                 <div class="form-group">
                     <label>Port</label>
-                    <input type="number" id="addPort" value="993" required>
+                    <input type="number" id="port" value="993" required>
                 </div>
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="addUsername" required>
+                    <input type="text" id="username" required>
                 </div>
                 <div class="form-group">
                     <label>Password <span class="keyring-badge">🔒 Secure</span></label>
-                    <input type="password" id="addPassword" required>
+                    <input type="password" id="password" required>
                     <small style="color:#666;">Password will be stored securely in system keyring</small>
                 </div>
                 <div class="form-group">
                     <label>Check Interval (seconds)</label>
                     <input type="number" id="interval" value="120" required>
                 </div>
-                <div class="form-group">
-                    <label>Folder Mode</label>
-                    <select id="addFolderMode" onchange="toggleFolderInputs()">
-                        <option value="all">All Folders</option>
-                        <option value="include">Include Specific Folders</option>
-                        <option value="exclude">Exclude Specific Folders</option>
-                    </select>
-                </div>
-                <div class="form-group" id="addFetchFoldersGroup" style="display:none;">
-                    <button type="button" class="btn btn-primary" onclick="fetchFolders('add')" style="width:100%;">
-                        📁 Fetch Folders from Server
-                    </button>
-                    <small style="color:#666;">Click to retrieve available folders and select them</small>
-                </div>
-                <div class="form-group" id="addIncludeFoldersGroup" style="display:none;">
-                    <label>Include Folders</label>
-                    <div id="addIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="addIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                <div id="folderSettings">
+                    <div class="protocol-note">
+                        ℹ️ <strong>Note:</strong> Folder selection is only available for IMAP. POP3 only accesses the inbox.
                     </div>
-                </div>
-                <div class="form-group" id="addExcludeFoldersGroup" style="display:none;">
-                    <label>Exclude Folders</label>
-                    <div id="addExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="addExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    <div class="form-group">
+                        <label>Folder Mode</label>
+                        <select id="folderMode">
+                            <option value="all">All Folders</option>
+                            <option value="include">Include Specific Folders</option>
+                            <option value="exclude">Exclude Specific Folders</option>
+                        </select>
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
@@ -623,12 +618,20 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             <form id="editForm">
                 <input type="hidden" id="editIndex">
                 <div class="form-group">
+                    <label>Protocol</label>
+                    <select id="editProtocol" readonly disabled style="background:#f5f5f5;">
+                        <option value="imap">IMAP</option>
+                        <option value="pop3">POP3</option>
+                    </select>
+                    <small style="color:#666;">Protocol cannot be changed</small>
+                </div>
+                <div class="form-group">
                     <label>Email</label>
                     <input type="email" id="editEmail" required readonly style="background:#f5f5f5;">
                     <small style="color:#666;">Email cannot be changed (used as keyring identifier)</small>
                 </div>
                 <div class="form-group">
-                    <label>IMAP Server</label>
+                    <label id="editServerLabel">Server</label>
                     <input type="text" id="editServer" required>
                 </div>
                 <div class="form-group">
@@ -648,30 +651,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <label>Check Interval (seconds)</label>
                     <input type="number" id="editInterval" required>
                 </div>
-                <div class="form-group">
-                    <label>Folder Mode</label>
-                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
-                        <option value="all">All Folders</option>
-                        <option value="include">Include Specific</option>
-                        <option value="exclude">Exclude Specific</option>
-                    </select>
-                </div>
-                <div class="form-group" id="editFetchFoldersGroup" style="display:none;">
-                    <button type="button" class="btn btn-primary" onclick="fetchFolders('edit')" style="width:100%;">
-                        📁 Fetch Folders from Server
-                    </button>
-                    <small style="color:#666;">Click to retrieve available folders and select them</small>
-                </div>
-                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
-                    <label>Include Folders</label>
-                    <div id="editIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="editIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
-                    </div>
-                </div>
-                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
-                    <label>Exclude Folders</label>
-                    <div id="editExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
-                        <input type="text" id="editExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                <div id="editFolderSettings">
+                    <div class="form-group">
+                        <label>Folder Mode</label>
+                        <select id="editFolderMode">
+                            <option value="all">All Folders</option>
+                            <option value="include">Include Specific</option>
+                            <option value="exclude">Exclude Specific</option>
+                        </select>
                     </div>
                 </div>
 
@@ -686,141 +673,20 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
     <div id="toast" class="toast"></div>
 
     <script>
-        let fetchedFolders = [];
-        let currentFormType = '';
+        function updateProtocolSettings() {
+            const protocol = document.getElementById('protocol').value;
+            const folderSettings = document.getElementById('folderSettings');
+            const serverLabel = document.getElementById('serverLabel');
 
-        function toggleFolderInputs() {
-            const mode = document.getElementById('addFolderMode').value;
-            document.getElementById('addIncludeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
-            document.getElementById('addExcludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
-            document.getElementById('addFetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
-        }
-
-        function toggleEditFolderInputs() {
-            const mode = document.getElementById('editFolderMode').value;
-            document.getElementById('editIncludeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
-            document.getElementById('editExcludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
-            document.getElementById('editFetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
-        }
-
-        async function fetchFolders(formType) {
-            currentFormType = formType;
-            const prefix = formType === 'edit' ? 'edit' : 'add';
-
-      		const serverEl = document.getElementById(prefix + 'Server');
-            const portEl = document.getElementById(prefix + 'Port');
-            const usernameEl = document.getElementById(prefix + 'Username');
-            const passwordEl = document.getElementById(prefix + 'Password');
-
-
-
-            if (!serverEl || !portEl || !usernameEl || !passwordEl) {
-                showToast('Form fields not found', 'error');
-                return;
+            if (protocol === 'pop3') {
+                folderSettings.style.display = 'none';
+                serverLabel.textContent = 'POP3 Server';
+                document.getElementById('port').value = '995';
+            } else {
+                folderSettings.style.display = 'block';
+                serverLabel.textContent = 'IMAP Server';
+                document.getElementById('port').value = '993';
             }
-
-            const server = serverEl.value;
-            const port = parseInt(portEl.value);
-            const username = usernameEl.value;
-            const password = passwordEl.value;
-
-            if (!server || !port || !username) {
-                showToast('Please fill in server, port, and username first', 'error');
-                return;
-            }
-
-            if (formType === 'add' && !password) {
-                showToast('Please enter password for new account', 'error');
-                return;
-            }
-
-            if (formType === 'edit' && !password) {
-                showToast('Please enter password to fetch folders', 'error');
-                return;
-            }
-
-            const data = { server, port, username, password };
-
-            try {
-                showToast('Fetching folders...', 'success');
-                const response = await fetch('/api/accounts/folders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await response.json();
-
-                if (result.success) {
-                    fetchedFolders = result.folders || [];
-                    showToast(` + "`" + `Found ${fetchedFolders.length} folders` + "`" + `, 'success');
-                    displayFolderCheckboxes(formType);
-                } else {
-                    showToast(result.message || 'Failed to fetch folders', 'error');
-                }
-            } catch (error) {
-                showToast('Error fetching folders: ' + error, 'error');
-            }
-        }
-
-        function displayFolderCheckboxes(formType) {
-            const prefix = formType === 'edit' ? 'edit' : 'add';
-            const mode = document.getElementById(prefix + 'FolderMode').value;
-
-            if (mode === 'all') return;
-
-            const targetList = mode === 'include' ?
-                document.getElementById(prefix + 'IncludeFoldersList') :
-                document.getElementById(prefix + 'ExcludeFoldersList');
-
-            const textInput = mode === 'include' ?
-                document.getElementById(prefix + 'IncludeFolders') :
-                document.getElementById(prefix + 'ExcludeFolders');
-
-            // Get currently selected folders
-            const currentFolders = textInput.value.split(',').map(s => s.trim()).filter(s => s);
-
-            // Create checkboxes
-            const checkboxContainer = document.createElement('div');
-            checkboxContainer.className = 'folder-list-container show';
-            checkboxContainer.innerHTML = '<strong style="display:block;margin-bottom:8px;">Select folders:</strong>';
-
-            fetchedFolders.forEach(folder => {
-                const div = document.createElement('div');
-                div.className = 'folder-checkbox';
-
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.id = ` + "`" + `folder_${formType}_${folder.replace(/[^a-zA-Z0-9]/g, '_')}` + "`" + `;
-                checkbox.value = folder;
-                checkbox.checked = currentFolders.includes(folder);
-                checkbox.onchange = () => updateFolderInput(formType, mode);
-
-                const label = document.createElement('label');
-                label.htmlFor = checkbox.id;
-                label.textContent = folder;
-
-                div.appendChild(checkbox);
-                div.appendChild(label);
-                checkboxContainer.appendChild(div);
-            });
-
-            // Remove old checkboxes if any
-            const oldContainer = targetList.querySelector('.folder-list-container');
-            if (oldContainer) oldContainer.remove();
-
-            targetList.appendChild(checkboxContainer);
-        }
-
-        function updateFolderInput(formType, mode) {
-            const prefix = formType === 'edit' ? 'edit' : 'add';
-            const checkboxes = document.querySelectorAll(` + "`" + `input[type="checkbox"][id^="folder_${formType}_"]:checked` + "`" + `);
-            const selected = Array.from(checkboxes).map(cb => cb.value);
-
-            const textInput = mode === 'include' ?
-                document.getElementById(prefix + 'IncludeFolders') :
-                document.getElementById(prefix + 'ExcludeFolders');
-
-            textInput.value = selected.join(', ');
         }
 
         function showToast(message, type = 'success') {
@@ -832,22 +698,31 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         function setProvider() {
             const provider = document.getElementById('provider').value;
+            const protocol = document.getElementById('protocol').value;
             const servers = {
-                gmail: { server: 'imap.gmail.com', port: 993 },
-                outlook: { server: 'outlook.office365.com', port: 993 },
-                yahoo: { server: 'imap.mail.yahoo.com', port: 993 }
+                gmail: {
+                    imap: { server: 'imap.gmail.com', port: 993 },
+                    pop3: { server: 'pop.gmail.com', port: 995 }
+                },
+                outlook: {
+                    imap: { server: 'outlook.office365.com', port: 993 },
+                    pop3: { server: 'outlook.office365.com', port: 995 }
+                },
+                yahoo: {
+                    imap: { server: 'imap.mail.yahoo.com', port: 993 },
+                    pop3: { server: 'pop.mail.yahoo.com', port: 995 }
+                }
             };
-            if (servers[provider]) {
-                document.getElementById('server').value = servers[provider].server;
-                document.getElementById('port').value = servers[provider].port;
+            if (servers[provider] && servers[provider][protocol]) {
+                document.getElementById('server').value = servers[provider][protocol].server;
+                document.getElementById('port').value = servers[provider][protocol].port;
             }
         }
 
         function showAddModal() {
             document.getElementById('addModal').style.display = 'block';
-            // Reset form and visibility
             document.getElementById('addForm').reset();
-            toggleFolderInputs();
+            updateProtocolSettings();
         }
 
         function closeModal() {
@@ -860,10 +735,11 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         async function testConnection() {
             const data = {
-                server: document.getElementById('addServer').value,
-                port: parseInt(document.getElementById('addPort').value),
-                username: document.getElementById('addUsername').value,
-                password: document.getElementById('addPassword').value
+                protocol: document.getElementById('protocol').value,
+                server: document.getElementById('server').value,
+                port: parseInt(document.getElementById('port').value),
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value
             };
 
             try {
@@ -882,15 +758,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         document.getElementById('addForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const data = {
+                protocol: document.getElementById('protocol').value,
                 email: document.getElementById('email').value,
-                server: document.getElementById('addServer').value,
-                port: parseInt(document.getElementById('addPort').value),
-                username: document.getElementById('addUsername').value,
-                password: document.getElementById('addPassword').value,
+                server: document.getElementById('server').value,
+                port: parseInt(document.getElementById('port').value),
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
                 check_interval: parseInt(document.getElementById('interval').value),
-                folder_mode: document.getElementById('addFolderMode').value,
-                include_folders: document.getElementById('addIncludeFolders').value.split(',').map(s => s.trim()).filter(s => s),
-                exclude_folders: document.getElementById('addExcludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
+                folder_mode: document.getElementById('folderMode').value
             };
 
             try {
@@ -922,9 +797,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('editUsername').value,
                 password: document.getElementById('editPassword').value,
                 check_interval: parseInt(document.getElementById('editInterval').value),
-                folder_mode: document.getElementById('editFolderMode').value,
-                include_folders: document.getElementById('editIncludeFolders').value.split(',').map(s => s.trim()).filter(s => s),
-                exclude_folders: document.getElementById('editExcludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
+                folder_mode: document.getElementById('editFolderMode').value
             };
 
             try {
@@ -951,16 +824,21 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 .then(accounts => {
                     const acc = accounts[index];
                     document.getElementById('editIndex').value = index;
+                    document.getElementById('editProtocol').value = acc.protocol;
                     document.getElementById('editEmail').value = acc.email;
                     document.getElementById('editServer').value = acc.server;
                     document.getElementById('editPort').value = acc.port;
                     document.getElementById('editUsername').value = acc.username;
-                    document.getElementById('editPassword').value = ''; // Don't show password
+                    document.getElementById('editPassword').value = '';
                     document.getElementById('editInterval').value = acc.check_interval;
                     document.getElementById('editFolderMode').value = acc.folder_mode;
-                    document.getElementById('editIncludeFolders').value = (acc.include_folders || []).join(', ');
-                    document.getElementById('editExcludeFolders').value = (acc.exclude_folders || []).join(', ');
-                    toggleEditFolderInputs();
+
+                    if (acc.protocol === 'pop3') {
+                        document.getElementById('editFolderSettings').style.display = 'none';
+                    } else {
+                        document.getElementById('editFolderSettings').style.display = 'block';
+                    }
+
                     document.getElementById('editModal').style.display = 'block';
                 });
         }
@@ -1025,19 +903,23 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     return;
                 }
 
-                container.innerHTML = accounts.map((acc, index) => ` + "`" + `
+                container.innerHTML = accounts.map((acc, index) => {
+                    const protocolClass = acc.protocol === 'pop3' ? 'protocol-pop3' : 'protocol-imap';
+                    const protocolText = acc.protocol.toUpperCase();
+                    return ` + "`" + `
                     <div class="account-card">
-                        <h3>${acc.email} <span class="keyring-badge">🔒</span></h3>
+                        <h3>${acc.email} <span class="protocol-badge ${protocolClass}">${protocolText}</span> <span class="keyring-badge">🔒</span></h3>
                         <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
                         <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
-                        <div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>
+                        ${acc.protocol === 'imap' ? ` + "`" + `<div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>` + "`" + ` : ''}
                         <div class="detail"><strong>Last Check:</strong> ${acc.last_check || 'Never'}</div>
                         <div class="account-actions">
                             <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">Edit</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteAccount(${index})">Delete</button>
                         </div>
                     </div>
-                ` + "`" + `).join('');
+                    ` + "`" + `;
+                }).join('');
             } catch (error) {
                 console.error('Failed to load accounts:', error);
             }
@@ -1066,6 +948,7 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 		Server         string   `json:"server"`
 		Port           int      `json:"port"`
 		Username       string   `json:"username"`
+		Protocol       string   `json:"protocol"`
 		CheckInterval  int      `json:"check_interval"`
 		FolderMode     string   `json:"folder_mode"`
 		IncludeFolders []string `json:"include_folders"`
@@ -1087,6 +970,7 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Server:         acc.Server,
 			Port:           acc.Port,
 			Username:       acc.Username,
+			Protocol:       acc.Protocol,
 			CheckInterval:  acc.CheckInterval,
 			FolderMode:     acc.FolderMode,
 			IncludeFolders: acc.IncludeFolders,
@@ -1110,6 +994,7 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		Port           int      `json:"port"`
 		Username       string   `json:"username"`
 		Password       string   `json:"password"`
+		Protocol       string   `json:"protocol"`
 		CheckInterval  int      `json:"check_interval"`
 		FolderMode     string   `json:"folder_mode"`
 		IncludeFolders []string `json:"include_folders"`
@@ -1121,7 +1006,6 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store password in keyring
 	if err := setPassword(newAccount.Email, newAccount.Password); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to store password in keyring: %v", err), http.StatusInternalServerError)
 		return
@@ -1132,7 +1016,7 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		Server:                  newAccount.Server,
 		Port:                    newAccount.Port,
 		Username:                newAccount.Username,
-		Protocol:                "imap",
+		Protocol:                newAccount.Protocol,
 		CheckInterval:           newAccount.CheckInterval,
 		CheckHistory:            1000,
 		EnableNotificationSound: true,
@@ -1191,7 +1075,6 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 
 	acc := &config.Accounts[update.Index]
 
-	// Update password in keyring if provided
 	if update.Password != "" {
 		if err := setPassword(acc.Email, update.Password); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update password in keyring: %v", err), http.StatusInternalServerError)
@@ -1212,7 +1095,6 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Restart monitoring
 	acc.stopChan <- true
 	time.Sleep(100 * time.Millisecond)
 	acc.stopChan = make(chan bool)
@@ -1244,15 +1126,12 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 
 	email := config.Accounts[req.Index].Email
 
-	// Stop monitoring
 	config.Accounts[req.Index].stopChan <- true
 
-	// Delete password from keyring
 	if err := deletePassword(email); err != nil {
 		log.Printf("Failed to delete password from keyring: %v", err)
 	}
 
-	// Remove account
 	config.Accounts = append(config.Accounts[:req.Index], config.Accounts[req.Index+1:]...)
 
 	if err := saveConfig(); err != nil {
@@ -1275,10 +1154,19 @@ func handleFetchFolders(w http.ResponseWriter, r *http.Request) {
 		Port     int    `json:"port"`
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Protocol string `json:"protocol"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Protocol == "pop3" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "POP3 does not support folder listing (inbox only)",
+		})
 		return
 	}
 
@@ -1333,6 +1221,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var test struct {
+		Protocol string `json:"protocol"`
 		Server   string `json:"server"`
 		Port     int    `json:"port"`
 		Username string `json:"username"`
@@ -1341,6 +1230,21 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&test); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if test.Protocol == "pop3" {
+		if err := testPOP3Connection(test.Server, test.Port, test.Username, test.Password); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("POP3 connection failed: %v", err),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "✅ POP3 connection successful!",
+		})
 		return
 	}
 
@@ -1383,7 +1287,7 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("✅ Connected successfully! Found %d folders", folderCount),
+		"message": fmt.Sprintf("✅ IMAP connected successfully! Found %d folders", folderCount),
 	})
 }
 
@@ -1432,17 +1336,25 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 func startMonitoring(acc *AccountConfig) {
-	log.Printf("[%s] Monitor started (interval: %ds, mode: %s)", acc.Email, acc.CheckInterval, acc.FolderMode)
+	log.Printf("[%s] Monitor started (protocol: %s, interval: %ds)", acc.Email, acc.Protocol, acc.CheckInterval)
 
 	acc.ticker = time.NewTicker(time.Duration(acc.CheckInterval) * time.Second)
 	defer acc.ticker.Stop()
 
-	checkNewEmails(acc)
+	if acc.Protocol == "pop3" {
+		checkNewEmailsPOP3(acc)
+	} else {
+		checkNewEmails(acc)
+	}
 
 	for {
 		select {
 		case <-acc.ticker.C:
-			checkNewEmails(acc)
+			if acc.Protocol == "pop3" {
+				checkNewEmailsPOP3(acc)
+			} else {
+				checkNewEmails(acc)
+			}
 		case <-acc.stopChan:
 			log.Printf("[%s] Monitor stopped", acc.Email)
 			return
@@ -1523,8 +1435,109 @@ func checkNewEmails(acc *AccountConfig) error {
 	return nil
 }
 
+func checkNewEmailsPOP3(acc *AccountConfig) error {
+	password, err := getPassword(acc.Email)
+	if err != nil {
+		log.Printf("%s: Failed to get password: %v", acc.Email, err)
+		return err
+	}
+
+	p := pop3.New(pop3.Opt{
+		Host:       acc.Server,
+		Port:       acc.Port,
+		TLSEnabled: true,
+	})
+
+	c, err := p.NewConn()
+	if err != nil {
+		log.Printf("%s: POP3 Connect error: %v", acc.Email, err)
+		return err
+	}
+	defer c.Quit()
+
+	if err := c.Auth(acc.Username, password); err != nil {
+		log.Printf("%s: POP3 Auth error: %v", acc.Email, err)
+		return err
+	}
+
+	msgCount, _, err := c.Stat()
+	if err != nil {
+		log.Printf("%s: POP3 Stat error: %v", acc.Email, err)
+		return err
+	}
+
+	newNotifications := false
+	for i := 1; i <= msgCount; i++ {
+		msg, err := c.Retr(i)
+		if err != nil {
+			continue
+		}
+
+		// Read the body from io.Reader
+		bodyBytes, err := io.ReadAll(msg.Body)
+		if err != nil {
+			continue
+		}
+		bodyStr := string(bodyBytes)
+
+		emailID := fmt.Sprintf("pop3-%d-%s", i, extractMessageID(bodyStr))
+
+		acc.mu.Lock()
+		alreadyNotified := acc.notifiedEmails[emailID]
+		acc.mu.Unlock()
+
+		if !alreadyNotified {
+			from := msg.Header.Get("From")
+			subject := msg.Header.Get("Subject")
+
+			if applyFiltersPOP3(acc, from, subject) {
+				showNotificationPOP3(acc, from, subject)
+				acc.mu.Lock()
+				acc.notifiedEmails[emailID] = true
+				acc.mu.Unlock()
+				newNotifications = true
+			}
+		}
+	}
+
+	acc.mu.Lock()
+	acc.lastCheckTime = time.Now()
+	acc.unreadCount = msgCount
+	acc.mu.Unlock()
+
+	if newNotifications {
+		saveNotifiedEmails(acc)
+	}
+
+	return nil
+}
+
+func testPOP3Connection(server string, port int, username, password string) error {
+	// Initialize the POP3 client
+	p := pop3.New(pop3.Opt{
+		Host:       server,
+		Port:       port,
+		TLSEnabled: true,
+	})
+
+	// Create a new connection
+	c, err := p.NewConn()
+	if err != nil {
+		return err
+	}
+	defer c.Quit()
+
+	// Authenticate
+	if err := c.Auth(username, password); err != nil {
+		return err
+	}
+
+	// Test with Stat command
+	_, _, err = c.Stat()
+	return err
+}
+
 func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
-	// Get password from keyring
 	password, err := getPassword(acc.Email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get password from keyring: %v", err)
@@ -1626,6 +1639,47 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 	return true
 }
 
+func applyFiltersPOP3(acc *AccountConfig, from, subject string) bool {
+	senderEmail := extractEmailAddress(from)
+	subjectLower := strings.ToLower(subject)
+
+	for _, excludeEmail := range acc.ExcludeEmail {
+		if strings.EqualFold(senderEmail, excludeEmail) {
+			return false
+		}
+	}
+
+	for _, keyword := range acc.ExcludeKeyword {
+		if strings.Contains(subjectLower, strings.ToLower(keyword)) {
+			return false
+		}
+	}
+
+	hasIncludeFilters := len(acc.IncludeEmail) > 0 || len(acc.IncludeKeyword) > 0
+
+	if hasIncludeFilters {
+		if len(acc.IncludeEmail) > 0 {
+			for _, includeEmail := range acc.IncludeEmail {
+				if strings.EqualFold(senderEmail, includeEmail) {
+					return true
+				}
+			}
+		}
+
+		if len(acc.IncludeKeyword) > 0 {
+			for _, keyword := range acc.IncludeKeyword {
+				if strings.Contains(subjectLower, strings.ToLower(keyword)) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	return true
+}
+
 func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 	var sender string
 	if len(env.From) > 0 {
@@ -1665,6 +1719,67 @@ func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 	}
 
 	log.Printf("[%s][%s] NEW EMAIL - From: %s | Subject: %s", acc.Email, folder, sender, subject)
+}
+
+func showNotificationPOP3(acc *AccountConfig, from, subject string) {
+	sender := extractEmailAddress(from)
+	if sender == "" {
+		sender = from
+	}
+
+	if subject == "" {
+		subject = "(No Subject)"
+	}
+
+	displaySubject := subject
+	if len(displaySubject) > 50 {
+		displaySubject = displaySubject[:47] + "..."
+	}
+
+	title := fmt.Sprintf("📧 %s [POP3]", acc.Email)
+	message := fmt.Sprintf("From: %s\nSubject: %s", sender, displaySubject)
+
+	var err error
+	if acc.EnableNotificationSound {
+		err = beeep.Notify(title, message, "")
+	} else {
+		err = beeep.Alert(title, message, "")
+	}
+
+	if err != nil {
+		log.Printf("[%s] Notification error: %v", acc.Email, err)
+	}
+
+	log.Printf("[%s][POP3] NEW EMAIL - From: %s | Subject: %s", acc.Email, sender, subject)
+}
+
+func extractHeader(msg, header string) string {
+	lines := strings.Split(msg, "\r\n")
+	for _, line := range lines {
+		if strings.HasPrefix(strings.ToLower(line), strings.ToLower(header)+":") {
+			return strings.TrimSpace(strings.TrimPrefix(line, header+":"))
+		}
+	}
+	return ""
+}
+
+func extractMessageID(msg string) string {
+	msgID := extractHeader(msg, "Message-ID")
+	if msgID != "" {
+		return msgID
+	}
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func extractEmailAddress(from string) string {
+	// Extract email from "Name <email@example.com>" format
+	if idx := strings.Index(from, "<"); idx != -1 {
+		if endIdx := strings.Index(from[idx:], ">"); endIdx != -1 {
+			return from[idx+1 : idx+endIdx]
+		}
+	}
+	// Return as-is if no angle brackets
+	return strings.TrimSpace(from)
 }
 
 func generateEmailID(folder string, uid uint32, messageID string) string {
@@ -1733,7 +1848,11 @@ func checkAllAccounts() {
 		wg.Add(1)
 		go func(acc *AccountConfig) {
 			defer wg.Done()
-			checkNewEmails(acc)
+			if acc.Protocol == "pop3" {
+				checkNewEmailsPOP3(acc)
+			} else {
+				checkNewEmails(acc)
+			}
 		}(&config.Accounts[i])
 	}
 	wg.Wait()

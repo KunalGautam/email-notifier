@@ -310,6 +310,7 @@ func openBrowser(url string) {
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
 	tmpl := template.Must(template.New("home").Parse(`
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -426,15 +427,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             border-radius: 4px;
             font-size: 14px;
         }
-        .status-badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        .status-running { background: #d4edda; color: #155724; }
-        .status-error { background: #f8d7da; color: #721c24; }
         .toast {
             position: fixed;
             top: 20px;
@@ -454,13 +446,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>📧 Email Monitor Dashboard</h1>
-            <p>Application Directory: {{.AppDir}}</p>
+            <h1>Email Monitor Dashboard</h1>
+            <p>Application Directory: ` + appDir + `</p>
             <div class="actions">
-                <button class="btn btn-primary" onclick="showAddModal()">➕ Add Account</button>
-                <button class="btn btn-success" onclick="checkAll()">🔍 Check All Now</button>
-                <button class="btn btn-warning" onclick="clearHistory()">🗑️ Clear History</button>
-                <button class="btn btn-danger" onclick="restartMonitor()">🔄 Restart</button>
+                <button class="btn btn-primary" onclick="showAddModal()">Add Account</button>
+                <button class="btn btn-success" onclick="checkAll()">Check All Now</button>
+                <button class="btn btn-warning" onclick="clearHistory()">Clear History</button>
+                <button class="btn btn-danger" onclick="restartMonitor()">Restart</button>
             </div>
         </div>
 
@@ -504,10 +496,28 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <label>Check Interval (seconds)</label>
                     <input type="number" id="interval" value="120" required>
                 </div>
+                <div class="form-group">
+                    <label>Folder Mode</label>
+                    <select id="folderMode" onchange="toggleFolderInputs()">
+                        <option value="all">All Folders</option>
+                        <option value="include">Include Specific Folders</option>
+                        <option value="exclude">Exclude Specific Folders</option>
+                    </select>
+                </div>
+                <div class="form-group" id="includeFoldersGroup" style="display:none;">
+                    <label>Include Folders (comma-separated)</label>
+                    <input type="text" id="includeFolders" placeholder="INBOX, Work, Important">
+                    <small style="color:#666;">Example: INBOX, Work, Important</small>
+                </div>
+                <div class="form-group" id="excludeFoldersGroup" style="display:none;">
+                    <label>Exclude Folders (comma-separated)</label>
+                    <input type="text" id="excludeFolders" placeholder="Spam, Trash, Drafts">
+                    <small style="color:#666;">Example: Spam, Trash, Drafts</small>
+                </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button type="button" class="btn btn-primary" onclick="testConnection()">🔧 Test Connection</button>
-                    <button type="submit" class="btn btn-success">💾 Save</button>
-                    <button type="button" class="btn btn-danger" onclick="closeModal()">❌ Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="testConnection()">Test Connection</button>
+                    <button type="submit" class="btn btn-success">Save</button>
+                    <button type="button" class="btn btn-danger" onclick="closeModal()">Cancel</button>
                 </div>
             </form>
         </div>
@@ -544,15 +554,25 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 </div>
                 <div class="form-group">
                     <label>Folder Mode</label>
-                    <select id="editFolderMode">
+                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
                         <option value="all">All Folders</option>
                         <option value="include">Include Specific</option>
                         <option value="exclude">Exclude Specific</option>
                     </select>
                 </div>
+                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
+                    <label>Include Folders (comma-separated)</label>
+                    <input type="text" id="editIncludeFolders" placeholder="INBOX, Work, Important">
+                    <small style="color:#666;">Example: INBOX, Work, Important</small>
+                </div>
+                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
+                    <label>Exclude Folders (comma-separated)</label>
+                    <input type="text" id="editExcludeFolders" placeholder="Spam, Trash, Drafts">
+                    <small style="color:#666;">Example: Spam, Trash, Drafts</small>
+                </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button type="submit" class="btn btn-success">💾 Save</button>
-                    <button type="button" class="btn btn-danger" onclick="closeEditModal()">❌ Cancel</button>
+                    <button type="submit" class="btn btn-success">Save</button>
+                    <button type="button" class="btn btn-danger" onclick="closeEditModal()">Cancel</button>
                 </div>
             </form>
         </div>
@@ -561,6 +581,18 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
     <div id="toast" class="toast"></div>
 
     <script>
+        function toggleFolderInputs() {
+            const mode = document.getElementById('folderMode').value;
+            document.getElementById('includeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
+            document.getElementById('excludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
+        }
+
+        function toggleEditFolderInputs() {
+            const mode = document.getElementById('editFolderMode').value;
+            document.getElementById('editIncludeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
+            document.getElementById('editExcludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
+        }
+
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -622,7 +654,10 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 port: parseInt(document.getElementById('port').value),
                 username: document.getElementById('username').value,
                 password: document.getElementById('password').value,
-                check_interval: parseInt(document.getElementById('interval').value)
+                check_interval: parseInt(document.getElementById('interval').value),
+                folder_mode: document.getElementById('folderMode').value,
+                include_folders: document.getElementById('includeFolders').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_folders: document.getElementById('excludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
             };
 
             try {
@@ -654,7 +689,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('editUsername').value,
                 password: document.getElementById('editPassword').value,
                 check_interval: parseInt(document.getElementById('editInterval').value),
-                folder_mode: document.getElementById('editFolderMode').value
+                folder_mode: document.getElementById('editFolderMode').value,
+                include_folders: document.getElementById('editIncludeFolders').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_folders: document.getElementById('editExcludeFolders').value.split(',').map(s => s.trim()).filter(s => s)
             };
 
             try {
@@ -688,6 +725,9 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     document.getElementById('editPassword').value = acc.password;
                     document.getElementById('editInterval').value = acc.check_interval;
                     document.getElementById('editFolderMode').value = acc.folder_mode;
+                    document.getElementById('editIncludeFolders').value = (acc.include_folders || []).join(', ');
+                    document.getElementById('editExcludeFolders').value = (acc.exclude_folders || []).join(', ');
+                    toggleEditFolderInputs();
                     document.getElementById('editModal').style.display = 'block';
                 });
         }
@@ -747,16 +787,21 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 const accounts = await response.json();
 
                 const container = document.getElementById('accounts');
+                if (accounts.length === 0) {
+                    container.innerHTML = '<p style="text-align:center;color:#666;">No accounts configured. Click "Add Account" to get started.</p>';
+                    return;
+                }
+
                 container.innerHTML = accounts.map((acc, index) => ` + "`" + `
                     <div class="account-card">
-                        <h3>📧 ${acc.email}</h3>
+                        <h3>${acc.email}</h3>
                         <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
                         <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
                         <div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>
                         <div class="detail"><strong>Last Check:</strong> ${acc.last_check || 'Never'}</div>
                         <div class="account-actions">
-                            <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">✏️ Edit</button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteAccount(${index})">🗑️ Delete</button>
+                            <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteAccount(${index})">Delete</button>
                         </div>
                     </div>
                 ` + "`" + `).join('');
@@ -771,7 +816,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>
 `))
-
 	data := struct {
 		AppDir string
 	}{
@@ -785,14 +829,16 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	type AccountResponse struct {
-		Email         string `json:"email"`
-		Server        string `json:"server"`
-		Port          int    `json:"port"`
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		CheckInterval int    `json:"check_interval"`
-		FolderMode    string `json:"folder_mode"`
-		LastCheck     string `json:"last_check"`
+		Email          string   `json:"email"`
+		Server         string   `json:"server"`
+		Port           int      `json:"port"`
+		Username       string   `json:"username"`
+		Password       string   `json:"password"`
+		CheckInterval  int      `json:"check_interval"`
+		FolderMode     string   `json:"folder_mode"`
+		IncludeFolders []string `json:"include_folders"`
+		ExcludeFolders []string `json:"exclude_folders"`
+		LastCheck      string   `json:"last_check"`
 	}
 
 	accounts := make([]AccountResponse, len(config.Accounts))
@@ -805,14 +851,16 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 		acc.mu.RUnlock()
 
 		accounts[i] = AccountResponse{
-			Email:         acc.Email,
-			Server:        acc.Server,
-			Port:          acc.Port,
-			Username:      acc.Username,
-			Password:      acc.Password,
-			CheckInterval: acc.CheckInterval,
-			FolderMode:    acc.FolderMode,
-			LastCheck:     lastCheck,
+			Email:          acc.Email,
+			Server:         acc.Server,
+			Port:           acc.Port,
+			Username:       acc.Username,
+			Password:       acc.Password,
+			CheckInterval:  acc.CheckInterval,
+			FolderMode:     acc.FolderMode,
+			IncludeFolders: acc.IncludeFolders,
+			ExcludeFolders: acc.ExcludeFolders,
+			LastCheck:      lastCheck,
 		}
 	}
 
@@ -881,14 +929,16 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var update struct {
-		Index         int    `json:"index"`
-		Email         string `json:"email"`
-		Server        string `json:"server"`
-		Port          int    `json:"port"`
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		CheckInterval int    `json:"check_interval"`
-		FolderMode    string `json:"folder_mode"`
+		Index          int      `json:"index"`
+		Email          string   `json:"email"`
+		Server         string   `json:"server"`
+		Port           int      `json:"port"`
+		Username       string   `json:"username"`
+		Password       string   `json:"password"`
+		CheckInterval  int      `json:"check_interval"`
+		FolderMode     string   `json:"folder_mode"`
+		IncludeFolders []string `json:"include_folders"`
+		ExcludeFolders []string `json:"exclude_folders"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
@@ -909,6 +959,8 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	acc.Password = update.Password
 	acc.CheckInterval = update.CheckInterval
 	acc.FolderMode = update.FolderMode
+	acc.IncludeFolders = update.IncludeFolders
+	acc.ExcludeFolders = update.ExcludeFolders
 
 	if err := saveConfig(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -135,7 +135,7 @@ func migratePasswordsToKeyring() {
 			}
 		}
 	}
-	
+
 	if migrated {
 		if err := saveConfig(); err != nil {
 			log.Printf("Failed to save config after migration: %v", err)
@@ -292,6 +292,7 @@ func startWebServer() {
 	http.HandleFunc("/api/accounts/update", handleUpdateAccount)
 	http.HandleFunc("/api/accounts/delete", handleDeleteAccount)
 	http.HandleFunc("/api/accounts/test", handleTestConnection)
+	http.HandleFunc("/api/accounts/folders", handleFetchFolders)
 	http.HandleFunc("/api/status", handleStatus)
 	http.HandleFunc("/api/check-all", handleCheckAll)
 	http.HandleFunc("/api/clear-history", handleClearHistory)
@@ -501,6 +502,27 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
             font-size: 11px;
             margin-left: 8px;
         }
+        .folder-checkbox {
+            display: block;
+            padding: 5px;
+            margin: 3px 0;
+        }
+        .folder-checkbox input {
+            margin-right: 8px;
+            width: auto;
+        }
+        .folder-checkbox label {
+            display: inline;
+            margin: 0;
+            cursor: pointer;
+            font-weight: normal;
+        }
+        .folder-list-container {
+            display: none;
+        }
+        .folder-list-container.show {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -568,13 +590,23 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                         <option value="exclude">Exclude Specific Folders</option>
                     </select>
                 </div>
+                <div class="form-group" id="fetchFoldersGroup">
+                    <button type="button" class="btn btn-primary" onclick="fetchFolders('add')" style="width:100%;">
+                        📁 Fetch Folders from Server
+                    </button>
+                    <small style="color:#666;">Click to retrieve available folders and select them</small>
+                </div>
                 <div class="form-group" id="includeFoldersGroup" style="display:none;">
-                    <label>Include Folders (comma-separated)</label>
-                    <input type="text" id="includeFolders" placeholder="INBOX, Work, Important">
+                    <label>Include Folders</label>
+                    <div id="includeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="includeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    </div>
                 </div>
                 <div class="form-group" id="excludeFoldersGroup" style="display:none;">
-                    <label>Exclude Folders (comma-separated)</label>
-                    <input type="text" id="excludeFolders" placeholder="Spam, Trash, Drafts">
+                    <label>Exclude Folders</label>
+                    <div id="excludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                        <input type="text" id="excludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                    </div>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="button" class="btn btn-primary" onclick="testConnection()">Test Connection</button>
@@ -643,16 +675,119 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
     <div id="toast" class="toast"></div>
 
     <script>
+        let fetchedFolders = [];
+        let currentFormType = '';
+
         function toggleFolderInputs() {
             const mode = document.getElementById('folderMode').value;
             document.getElementById('includeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
             document.getElementById('excludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
+            document.getElementById('fetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
         }
 
         function toggleEditFolderInputs() {
             const mode = document.getElementById('editFolderMode').value;
             document.getElementById('editIncludeFoldersGroup').style.display = mode === 'include' ? 'block' : 'none';
             document.getElementById('editExcludeFoldersGroup').style.display = mode === 'exclude' ? 'block' : 'none';
+            document.getElementById('editFetchFoldersGroup').style.display = mode !== 'all' ? 'block' : 'none';
+        }
+
+        async function fetchFolders(formType) {
+            currentFormType = formType;
+            const prefix = formType === 'edit' ? 'edit' : '';
+
+            const server = document.getElementById(prefix + 'Server').value;
+            const port = parseInt(document.getElementById(prefix + 'Port').value);
+            const username = document.getElementById(prefix + 'Username').value;
+            const password = document.getElementById(prefix + 'Password').value;
+
+            if (!server || !port || !username || !password) {
+                showToast('Please fill in server, port, username, and password first', 'error');
+                return;
+            }
+
+            const data = { server, port, username, password };
+
+            try {
+                showToast('Fetching folders...', 'success');
+                const response = await fetch('/api/accounts/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    fetchedFolders = result.folders || [];
+                    showToast(` + "`" + `Found ${fetchedFolders.length} folders` + "`" + `, 'success');
+                    displayFolderCheckboxes(formType);
+                } else {
+                    showToast(result.message || 'Failed to fetch folders', 'error');
+                }
+            } catch (error) {
+                showToast('Error fetching folders: ' + error, 'error');
+            }
+        }
+
+        function displayFolderCheckboxes(formType) {
+            const prefix = formType === 'edit' ? 'edit' : '';
+            const mode = document.getElementById(prefix + 'FolderMode').value;
+
+            if (mode === 'all') return;
+
+            const targetList = mode === 'include' ?
+                document.getElementById(prefix + 'IncludeFoldersList') :
+                document.getElementById(prefix + 'ExcludeFoldersList');
+
+            const textInput = mode === 'include' ?
+                document.getElementById(prefix + 'IncludeFolders') :
+                document.getElementById(prefix + 'ExcludeFolders');
+
+            // Get currently selected folders
+            const currentFolders = textInput.value.split(',').map(s => s.trim()).filter(s => s);
+
+            // Create checkboxes
+            const checkboxContainer = document.createElement('div');
+            checkboxContainer.className = 'folder-list-container show';
+            checkboxContainer.innerHTML = '<strong style="display:block;margin-bottom:8px;">Select folders:</strong>';
+
+            fetchedFolders.forEach(folder => {
+                const div = document.createElement('div');
+                div.className = 'folder-checkbox';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = ` + "`" + `folder_${formType}_${folder.replace(/[^a-zA-Z0-9]/g, '_')}` + "`" + `;
+                checkbox.value = folder;
+                checkbox.checked = currentFolders.includes(folder);
+                checkbox.onchange = () => updateFolderInput(formType, mode);
+
+                const label = document.createElement('label');
+                label.htmlFor = checkbox.id;
+                label.textContent = folder;
+
+                div.appendChild(checkbox);
+                div.appendChild(label);
+                checkboxContainer.appendChild(div);
+            });
+
+            // Remove old checkboxes if any
+            const oldContainer = targetList.querySelector('.folder-list-container');
+            if (oldContainer) oldContainer.remove();
+
+            targetList.appendChild(checkboxContainer);
+        }
+
+        function updateFolderInput(formType, mode) {
+            const prefix = formType === 'edit' ? 'edit' : '';
+            const checkboxes = document.querySelectorAll(` + "`" + `input[type="checkbox"][id^="folder_${formType}_"]:checked` + "`" + `);
+            const selected = Array.from(checkboxes).map(cb => cb.value);
+
+            const textInput = mode === 'include' ?
+                document.getElementById(prefix + 'IncludeFolders') :
+                document.getElementById(prefix + 'ExcludeFolders');
+
+            textInput.value = selected.join(', ');
         }
 
         function showToast(message, type = 'success') {
@@ -1091,6 +1226,68 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleFetchFolders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Server   string `json:"server"`
+		Port     int    `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	c, err := client.DialTLS(fmt.Sprintf("%s:%d", req.Server, req.Port), nil)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Connection failed: %v", err),
+		})
+		return
+	}
+	defer c.Logout()
+
+	if err := c.Login(req.Username, req.Password); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Login failed: %v", err),
+		})
+		return
+	}
+
+	mailboxes := make(chan *imap.MailboxInfo, 100)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.List("", "*", mailboxes)
+	}()
+
+	var folders []string
+	for m := range mailboxes {
+		folders = append(folders, m.Name)
+	}
+
+	if err := <-done; err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Failed to list folders: %v", err),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"folders": folders,
+		"message": fmt.Sprintf("Successfully retrieved %d folders", len(folders)),
+	})
 }
 
 func handleTestConnection(w http.ResponseWriter, r *http.Request) {

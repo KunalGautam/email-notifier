@@ -860,10 +860,10 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         async function testConnection() {
             const data = {
-                server: document.getElementById('server').value,
-                port: parseInt(document.getElementById('port').value),
-                username: document.getElementById('username').value,
-                password: document.getElementById('password').value
+                server: document.getElementById('addServer').value,
+                port: parseInt(document.getElementById('addPort').value),
+                username: document.getElementById('addUsername').value,
+                password: document.getElementById('addPassword').value
             };
 
             try {

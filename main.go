@@ -649,21 +649,33 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <input type="number" id="editInterval" required>
                 </div>
                 <div class="form-group">
-                    <label>Folder Mode</label>
-                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
-                        <option value="all">All Folders</option>
-                        <option value="include">Include Specific</option>
-                        <option value="exclude">Exclude Specific</option>
-                    </select>
-                </div>
-                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
-                    <label>Include Folders (comma-separated)</label>
-                    <input type="text" id="editIncludeFolders" placeholder="INBOX, Work, Important">
-                </div>
-                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
-                    <label>Exclude Folders (comma-separated)</label>
-                    <input type="text" id="editExcludeFolders" placeholder="Spam, Trash, Drafts">
-                </div>
+                                    <label>Folder Mode</label>
+                                    <select id="editFolderMode" onchange="toggleEditFolderInputs()">
+                                        <option value="all">All Folders</option>
+                                        <option value="include">Include Specific</option>
+                                        <option value="exclude">Exclude Specific</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="editFetchFoldersGroup" style="display:none;">
+                                    <button type="button" class="btn btn-primary" onclick="fetchFolders('edit')" style="width:100%;">
+                                        🔍 Fetch Folders from Server
+                                    </button>
+                                    <small style="color:#666;">Click to retrieve available folders and select them</small>
+                                </div>
+                                <div class="form-group" id="editIncludeFoldersGroup" style="display:none;">
+                                    <label>Include Folders</label>
+                                    <div id="editIncludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                                        <input type="text" id="editIncludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                                    </div>
+                                </div>
+                                <div class="form-group" id="editExcludeFoldersGroup" style="display:none;">
+                                    <label>Exclude Folders</label>
+                                    <div id="editExcludeFoldersList" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;">
+                                        <input type="text" id="editExcludeFolders" placeholder="Enter comma-separated folders or fetch from server" style="margin-bottom:10px;">
+                                    </div>
+                                </div>
+
+
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="submit" class="btn btn-success">Save</button>
                     <button type="button" class="btn btn-danger" onclick="closeEditModal()">Cancel</button>

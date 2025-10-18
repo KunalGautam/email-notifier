@@ -3,9 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -54,22 +59,21 @@ var (
 	logFile          string
 	foldersListFile  string
 	historyDir       string
+	webServerPort    int
+	webServerURL     string
 )
 
 func init() {
-	// Get OS-specific application directory
 	var err error
 	appDir, err = getAppDir()
 	if err != nil {
 		log.Fatalf("Failed to get application directory: %v", err)
 	}
 
-	// Create application directory if it doesn't exist
 	if err := os.MkdirAll(appDir, 0755); err != nil {
 		log.Fatalf("Failed to create application directory: %v", err)
 	}
 
-	// Set file paths
 	configFile = filepath.Join(appDir, "config.json")
 	logFile = filepath.Join(appDir, "email-monitor.log")
 	foldersListFile = filepath.Join(appDir, "folders_list.json")
@@ -77,28 +81,25 @@ func init() {
 }
 
 func getAppDir() (string, error) {
+	oss := runtime.GOOS
 	var baseDir string
+	home := os.Getenv("HOME")
 
-	// Get OS-specific config directory
-	switch {
-	case os.Getenv("XDG_CONFIG_HOME") != "":
-		// Linux with XDG
-		baseDir = os.Getenv("XDG_CONFIG_HOME")
-	case os.Getenv("APPDATA") != "":
-		// Windows
-		baseDir = os.Getenv("APPDATA")
-	case os.Getenv("HOME") != "":
-		// macOS and Linux fallback
-		home := os.Getenv("HOME")
-		if _, err := os.Stat(filepath.Join(home, "Library")); err == nil {
-			// macOS
+	// Check XDG_CONFIG_HOME first (takes precedence on all platforms)
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		baseDir = xdgConfig
+	} else {
+		// Fall back to OS-specific defaults
+		switch oss {
+		case "darwin":
 			baseDir = filepath.Join(home, "Library", "Application Support")
-		} else {
-			// Linux fallback
+		case "linux":
 			baseDir = filepath.Join(home, ".config")
+		case "windows":
+			baseDir = os.Getenv("APPDATA")
+		default:
+			return "", fmt.Errorf("unable to determine user config directory")
 		}
-	default:
-		return "", fmt.Errorf("unable to determine user config directory")
 	}
 
 	return filepath.Join(baseDir, "email-monitor"), nil
@@ -126,6 +127,9 @@ func main() {
 
 	log.Printf("Starting email monitor for %d accounts", len(config.Accounts))
 
+	// Start web server on random port
+	go startWebServer()
+
 	systray.Run(onReady, onExit)
 }
 
@@ -151,7 +155,7 @@ func loadConfig() error {
 	}
 
 	if len(config.Accounts) == 0 {
-		return fmt.Errorf("no accounts configured in config.json")
+		return fmt.Errorf("no accounts configured")
 	}
 
 	for i := range config.Accounts {
@@ -182,16 +186,16 @@ func createSampleConfig() error {
 				Username:                "user@example.com",
 				Password:                "your-password",
 				Protocol:                "imap",
-				IncludeKeyword:          []string{"urgent", "invoice"},
-				ExcludeKeyword:          []string{"promotion", "newsletter"},
-				IncludeEmail:            []string{"boss@company.com"},
-				ExcludeEmail:            []string{"spam@example.com"},
+				IncludeKeyword:          []string{},
+				ExcludeKeyword:          []string{},
+				IncludeEmail:            []string{},
+				ExcludeEmail:            []string{},
 				CheckInterval:           120,
 				CheckHistory:            1000,
 				EnableNotificationSound: true,
 				FolderMode:              "all",
-				IncludeFolders:          []string{"INBOX", "Work"},
-				ExcludeFolders:          []string{"Spam", "Trash"},
+				IncludeFolders:          []string{},
+				ExcludeFolders:          []string{},
 			},
 		},
 	}
@@ -209,7 +213,6 @@ func createSampleConfig() error {
 	fmt.Printf("✅ Sample config created: %s\n", configFile)
 	fmt.Printf("Please edit it with your email settings and restart.\n")
 
-	// Show notification with config path
 	beeep.Notify("Email Monitor - Setup Required",
 		fmt.Sprintf("Config file created at:\n%s\n\nPlease edit and restart.", configFile), "")
 
@@ -217,87 +220,65 @@ func createSampleConfig() error {
 	return nil
 }
 
+func saveConfig() error {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configFile, data, 0644)
+}
+
+func startWebServer() {
+	// Find random available port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	webServerPort = listener.Addr().(*net.TCPAddr).Port
+	webServerURL = fmt.Sprintf("http://127.0.0.1:%d", webServerPort)
+	listener.Close()
+
+	log.Printf("Starting web server on %s", webServerURL)
+
+	// Setup routes
+	http.HandleFunc("/", handleHome)
+	http.HandleFunc("/api/accounts", handleAccounts)
+	http.HandleFunc("/api/accounts/add", handleAddAccount)
+	http.HandleFunc("/api/accounts/update", handleUpdateAccount)
+	http.HandleFunc("/api/accounts/delete", handleDeleteAccount)
+	http.HandleFunc("/api/accounts/test", handleTestConnection)
+	http.HandleFunc("/api/status", handleStatus)
+	http.HandleFunc("/api/check-all", handleCheckAll)
+	http.HandleFunc("/api/clear-history", handleClearHistory)
+	http.HandleFunc("/api/restart", handleRestart)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", webServerPort), nil))
+}
+
 func onReady() {
 	systray.SetIcon(getIconData())
 	systray.SetTitle("📧")
-	systray.SetTooltip(fmt.Sprintf("Email Monitor - %d accounts", len(config.Accounts)))
+	systray.SetTooltip(fmt.Sprintf("Email Monitor - Click to open"))
 
-	mStatus := systray.AddMenuItem("✅ Status: Running", "Current status")
-	mStatus.Disable()
+	// Wait for web server to be ready
+	time.Sleep(500 * time.Millisecond)
 
-	systray.AddSeparator()
+	systray.SetTooltip(fmt.Sprintf("Email Monitor\nClick to open dashboard\n%s", webServerURL))
 
-	accountMenuItems = make(map[string]*systray.MenuItem)
-	for i := range config.Accounts {
-		acc := &config.Accounts[i]
-		menuText := fmt.Sprintf("📧 %s - Checking...", acc.Email)
-		mAccount := systray.AddMenuItem(menuText, fmt.Sprintf("Account: %s", acc.Email))
-		mAccount.Disable()
-		accountMenuItems[acc.Email] = mAccount
-	}
+	// Add a click handler by creating a hidden menu item that opens browser
+	mOpen := systray.AddMenuItem("🖥️  Open Dashboard", "Open web dashboard")
 
-	systray.AddSeparator()
-
-	mCheckAll := systray.AddMenuItem("🔍 Check All Now", "Check all accounts immediately")
-	mClearHistory := systray.AddMenuItem("🗑️  Clear All History", "Clear notification history for all accounts")
-
-	mFolders := systray.AddMenuItem("📁 Folder Management", "Manage email folders")
-	mListFolders := mFolders.AddSubMenuItem("📋 List All Folders", "Get list of all folders from all accounts")
-	mViewFolderList := mFolders.AddSubMenuItem("👁️  View Saved Folder List", "View previously saved folder list")
-
-	mRestart := systray.AddMenuItem("🔄 Restart Monitor", "Restart email monitoring")
-	mReloadConfig := systray.AddMenuItem("⚙️  Reload Config", "Reload configuration file")
-
-	systray.AddSeparator()
-
-	mViewFiles := systray.AddMenuItem("📂 Open App Directory", "Open application directory in file manager")
-	mViewLogs := systray.AddMenuItem("📄 View File Locations", "Show file paths")
-	mExit := systray.AddMenuItem("❌ Exit", "Exit the application")
+	go func() {
+		for {
+			<-mOpen.ClickedCh
+			log.Printf("Opening dashboard: %s", webServerURL)
+			openBrowser(webServerURL)
+		}
+	}()
 
 	for i := range config.Accounts {
 		go startMonitoring(&config.Accounts[i])
 	}
-
-	go func() {
-		for {
-			select {
-			case <-mCheckAll.ClickedCh:
-				log.Println("Manual check all triggered")
-				checkAllAccounts()
-
-			case <-mClearHistory.ClickedCh:
-				log.Println("Clearing all notification history")
-				clearAllHistory()
-
-			case <-mListFolders.ClickedCh:
-				log.Println("Listing all folders")
-				go listAllFolders()
-
-			case <-mViewFolderList.ClickedCh:
-				log.Println("Viewing saved folder list")
-				viewSavedFolderList()
-
-			case <-mRestart.ClickedCh:
-				log.Println("Restarting all monitors...")
-				restartAllMonitors()
-
-			case <-mReloadConfig.ClickedCh:
-				log.Println("Reloading configuration...")
-				reloadConfiguration()
-
-			case <-mViewFiles.ClickedCh:
-				openAppDirectory()
-
-			case <-mViewLogs.ClickedCh:
-				showFilePaths()
-
-			case <-mExit.ClickedCh:
-				log.Println("Exiting application...")
-				systray.Quit()
-				return
-			}
-		}
-	}()
 }
 
 func onExit() {
@@ -312,22 +293,790 @@ func onExit() {
 	}
 }
 
+func openBrowser(url string) {
+	var err error
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	}
+	if err != nil {
+		log.Printf("Failed to open browser: %v", err)
+	}
+}
+
+func handleHome(w http.ResponseWriter, r *http.Request) {
+	tmpl := template.Must(template.New("home").Parse(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Email Monitor Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header h1 { color: #333; margin-bottom: 10px; }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-warning { background: #ffc107; color: black; }
+        .btn-warning:hover { background: #e0a800; }
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .account-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .account-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .account-card .detail {
+            margin: 8px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .account-card .detail strong {
+            color: #333;
+            display: inline-block;
+            width: 140px;
+        }
+        .account-actions {
+            margin-top: 15px;
+            display: flex;
+            gap: 8px;
+        }
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        .modal-content {
+            background: white;
+            margin: 50px auto;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-running { background: #d4edda; color: #155724; }
+        .status-error { background: #f8d7da; color: #721c24; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #333;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 5px;
+            display: none;
+            z-index: 2000;
+        }
+        .toast.show { display: block; }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📧 Email Monitor Dashboard</h1>
+            <p>Application Directory: {{.AppDir}}</p>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="showAddModal()">➕ Add Account</button>
+                <button class="btn btn-success" onclick="checkAll()">🔍 Check All Now</button>
+                <button class="btn btn-warning" onclick="clearHistory()">🗑️ Clear History</button>
+                <button class="btn btn-danger" onclick="restartMonitor()">🔄 Restart</button>
+            </div>
+        </div>
+
+        <div id="accounts" class="accounts-grid"></div>
+    </div>
+
+    <div id="addModal" class="modal">
+        <div class="modal-content">
+            <h2>Add Account</h2>
+            <form id="addForm">
+                <div class="form-group">
+                    <label>Provider</label>
+                    <select id="provider" onchange="setProvider()">
+                        <option value="custom">Custom</option>
+                        <option value="gmail">Gmail</option>
+                        <option value="outlook">Outlook</option>
+                        <option value="yahoo">Yahoo</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="email" required>
+                </div>
+                <div class="form-group">
+                    <label>IMAP Server</label>
+                    <input type="text" id="server" required>
+                </div>
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="number" id="port" value="993" required>
+                </div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <div class="form-group">
+                    <label>Check Interval (seconds)</label>
+                    <input type="number" id="interval" value="120" required>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button type="button" class="btn btn-primary" onclick="testConnection()">🔧 Test Connection</button>
+                    <button type="submit" class="btn btn-success">💾 Save</button>
+                    <button type="button" class="btn btn-danger" onclick="closeModal()">❌ Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <h2>Edit Account</h2>
+            <form id="editForm">
+                <input type="hidden" id="editIndex">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="editEmail" required>
+                </div>
+                <div class="form-group">
+                    <label>IMAP Server</label>
+                    <input type="text" id="editServer" required>
+                </div>
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="number" id="editPort" required>
+                </div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="editUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="editPassword" required>
+                </div>
+                <div class="form-group">
+                    <label>Check Interval (seconds)</label>
+                    <input type="number" id="editInterval" required>
+                </div>
+                <div class="form-group">
+                    <label>Folder Mode</label>
+                    <select id="editFolderMode">
+                        <option value="all">All Folders</option>
+                        <option value="include">Include Specific</option>
+                        <option value="exclude">Exclude Specific</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button type="submit" class="btn btn-success">💾 Save</button>
+                    <button type="button" class="btn btn-danger" onclick="closeEditModal()">❌ Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => toast.className = 'toast', 3000);
+        }
+
+        function setProvider() {
+            const provider = document.getElementById('provider').value;
+            const servers = {
+                gmail: { server: 'imap.gmail.com', port: 993 },
+                outlook: { server: 'outlook.office365.com', port: 993 },
+                yahoo: { server: 'imap.mail.yahoo.com', port: 993 }
+            };
+            if (servers[provider]) {
+                document.getElementById('server').value = servers[provider].server;
+                document.getElementById('port').value = servers[provider].port;
+            }
+        }
+
+        function showAddModal() {
+            document.getElementById('addModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('addModal').style.display = 'none';
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+
+        async function testConnection() {
+            const data = {
+                server: document.getElementById('server').value,
+                port: parseInt(document.getElementById('port').value),
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value
+            };
+
+            try {
+                const response = await fetch('/api/accounts/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                showToast(result.message, result.success ? 'success' : 'error');
+            } catch (error) {
+                showToast('Test failed: ' + error, 'error');
+            }
+        }
+
+        document.getElementById('addForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = {
+                email: document.getElementById('email').value,
+                server: document.getElementById('server').value,
+                port: parseInt(document.getElementById('port').value),
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                check_interval: parseInt(document.getElementById('interval').value)
+            };
+
+            try {
+                const response = await fetch('/api/accounts/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (response.ok) {
+                    showToast('Account added successfully');
+                    closeModal();
+                    loadAccounts();
+                } else {
+                    showToast('Failed to add account', 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        });
+
+        document.getElementById('editForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const index = parseInt(document.getElementById('editIndex').value);
+            const data = {
+                index: index,
+                email: document.getElementById('editEmail').value,
+                server: document.getElementById('editServer').value,
+                port: parseInt(document.getElementById('editPort').value),
+                username: document.getElementById('editUsername').value,
+                password: document.getElementById('editPassword').value,
+                check_interval: parseInt(document.getElementById('editInterval').value),
+                folder_mode: document.getElementById('editFolderMode').value
+            };
+
+            try {
+                const response = await fetch('/api/accounts/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (response.ok) {
+                    showToast('Account updated successfully');
+                    closeEditModal();
+                    loadAccounts();
+                } else {
+                    showToast('Failed to update account', 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        });
+
+        function editAccount(index) {
+            fetch('/api/accounts')
+                .then(r => r.json())
+                .then(accounts => {
+                    const acc = accounts[index];
+                    document.getElementById('editIndex').value = index;
+                    document.getElementById('editEmail').value = acc.email;
+                    document.getElementById('editServer').value = acc.server;
+                    document.getElementById('editPort').value = acc.port;
+                    document.getElementById('editUsername').value = acc.username;
+                    document.getElementById('editPassword').value = acc.password;
+                    document.getElementById('editInterval').value = acc.check_interval;
+                    document.getElementById('editFolderMode').value = acc.folder_mode;
+                    document.getElementById('editModal').style.display = 'block';
+                });
+        }
+
+        async function deleteAccount(index) {
+            if (!confirm('Are you sure you want to delete this account?')) return;
+
+            try {
+                const response = await fetch('/api/accounts/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: index })
+                });
+                if (response.ok) {
+                    showToast('Account deleted successfully');
+                    loadAccounts();
+                } else {
+                    showToast('Failed to delete account', 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        }
+
+        async function checkAll() {
+            try {
+                await fetch('/api/check-all', { method: 'POST' });
+                showToast('Checking all accounts...');
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        }
+
+        async function clearHistory() {
+            if (!confirm('Clear all notification history?')) return;
+            try {
+                await fetch('/api/clear-history', { method: 'POST' });
+                showToast('History cleared');
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        }
+
+        async function restartMonitor() {
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+                showToast('Monitor restarting...');
+                setTimeout(loadAccounts, 2000);
+            } catch (error) {
+                showToast('Error: ' + error, 'error');
+            }
+        }
+
+        async function loadAccounts() {
+            try {
+                const response = await fetch('/api/accounts');
+                const accounts = await response.json();
+
+                const container = document.getElementById('accounts');
+                container.innerHTML = accounts.map((acc, index) => ` + "`" + `
+                    <div class="account-card">
+                        <h3>📧 ${acc.email}</h3>
+                        <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
+                        <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
+                        <div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>
+                        <div class="detail"><strong>Last Check:</strong> ${acc.last_check || 'Never'}</div>
+                        <div class="account-actions">
+                            <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">✏️ Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteAccount(${index})">🗑️ Delete</button>
+                        </div>
+                    </div>
+                ` + "`" + `).join('');
+            } catch (error) {
+                console.error('Failed to load accounts:', error);
+            }
+        }
+
+        loadAccounts();
+        setInterval(loadAccounts, 10000);
+    </script>
+</body>
+</html>
+`))
+
+	data := struct {
+		AppDir string
+	}{
+		AppDir: appDir,
+	}
+
+	tmpl.Execute(w, data)
+}
+
+func handleAccounts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	type AccountResponse struct {
+		Email         string `json:"email"`
+		Server        string `json:"server"`
+		Port          int    `json:"port"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		CheckInterval int    `json:"check_interval"`
+		FolderMode    string `json:"folder_mode"`
+		LastCheck     string `json:"last_check"`
+	}
+
+	accounts := make([]AccountResponse, len(config.Accounts))
+	for i, acc := range config.Accounts {
+		acc.mu.RLock()
+		lastCheck := ""
+		if !acc.lastCheckTime.IsZero() {
+			lastCheck = acc.lastCheckTime.Format("15:04:05")
+		}
+		acc.mu.RUnlock()
+
+		accounts[i] = AccountResponse{
+			Email:         acc.Email,
+			Server:        acc.Server,
+			Port:          acc.Port,
+			Username:      acc.Username,
+			Password:      acc.Password,
+			CheckInterval: acc.CheckInterval,
+			FolderMode:    acc.FolderMode,
+			LastCheck:     lastCheck,
+		}
+	}
+
+	json.NewEncoder(w).Encode(accounts)
+}
+
+func handleAddAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var newAccount struct {
+		Email         string `json:"email"`
+		Server        string `json:"server"`
+		Port          int    `json:"port"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		CheckInterval int    `json:"check_interval"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&newAccount); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	acc := AccountConfig{
+		Email:                   newAccount.Email,
+		Server:                  newAccount.Server,
+		Port:                    newAccount.Port,
+		Username:                newAccount.Username,
+		Password:                newAccount.Password,
+		Protocol:                "imap",
+		CheckInterval:           newAccount.CheckInterval,
+		CheckHistory:            1000,
+		EnableNotificationSound: true,
+		FolderMode:              "all",
+		IncludeKeyword:          []string{},
+		ExcludeKeyword:          []string{},
+		IncludeEmail:            []string{},
+		ExcludeEmail:            []string{},
+		IncludeFolders:          []string{},
+		ExcludeFolders:          []string{},
+		notifiedEmails:          make(map[string]bool),
+		stopChan:                make(chan bool),
+	}
+
+	config.Accounts = append(config.Accounts, acc)
+
+	if err := saveConfig(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Start monitoring for new account
+	go startMonitoring(&config.Accounts[len(config.Accounts)-1])
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var update struct {
+		Index         int    `json:"index"`
+		Email         string `json:"email"`
+		Server        string `json:"server"`
+		Port          int    `json:"port"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		CheckInterval int    `json:"check_interval"`
+		FolderMode    string `json:"folder_mode"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if update.Index < 0 || update.Index >= len(config.Accounts) {
+		http.Error(w, "Invalid index", http.StatusBadRequest)
+		return
+	}
+
+	acc := &config.Accounts[update.Index]
+	acc.Email = update.Email
+	acc.Server = update.Server
+	acc.Port = update.Port
+	acc.Username = update.Username
+	acc.Password = update.Password
+	acc.CheckInterval = update.CheckInterval
+	acc.FolderMode = update.FolderMode
+
+	if err := saveConfig(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Restart monitoring for this account
+	acc.stopChan <- true
+	time.Sleep(100 * time.Millisecond)
+	acc.stopChan = make(chan bool)
+	go startMonitoring(acc)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Index int `json:"index"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Index < 0 || req.Index >= len(config.Accounts) {
+		http.Error(w, "Invalid index", http.StatusBadRequest)
+		return
+	}
+
+	// Stop monitoring
+	config.Accounts[req.Index].stopChan <- true
+
+	// Remove account
+	config.Accounts = append(config.Accounts[:req.Index], config.Accounts[req.Index+1:]...)
+
+	if err := saveConfig(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleTestConnection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var test struct {
+		Server   string `json:"server"`
+		Port     int    `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&test); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	c, err := client.DialTLS(fmt.Sprintf("%s:%d", test.Server, test.Port), nil)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Connection failed: %v", err),
+		})
+		return
+	}
+	defer c.Logout()
+
+	if err := c.Login(test.Username, test.Password); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("Login failed: %v", err),
+		})
+		return
+	}
+
+	mailboxes := make(chan *imap.MailboxInfo, 10)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.List("", "*", mailboxes)
+	}()
+
+	folderCount := 0
+	for range mailboxes {
+		folderCount++
+	}
+
+	if err := <-done; err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("List folders failed: %v", err),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("✅ Connected successfully! Found %d folders", folderCount),
+	})
+}
+
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"accounts": len(config.Accounts),
+		"running":  true,
+	})
+}
+
+func handleCheckAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	go checkAllAccounts()
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "checking"})
+}
+
+func handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	go clearAllHistory()
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+}
+
+func handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	go restartAllMonitors()
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "restarting"})
+}
+
 func startMonitoring(acc *AccountConfig) {
-	log.Printf("Monitor started for: %s (interval: %ds, mode: %s)", acc.Email, acc.CheckInterval, acc.FolderMode)
+	log.Printf("[%s] Monitor started (interval: %ds, mode: %s)", acc.Email, acc.CheckInterval, acc.FolderMode)
 
 	acc.ticker = time.NewTicker(time.Duration(acc.CheckInterval) * time.Second)
 	defer acc.ticker.Stop()
 
-	if err := checkNewEmails(acc); err != nil {
-		log.Printf("[%s] Error: %v", acc.Email, err)
-	}
+	checkNewEmails(acc)
 
 	for {
 		select {
 		case <-acc.ticker.C:
-			if err := checkNewEmails(acc); err != nil {
-				log.Printf("[%s] Error: %v", acc.Email, err)
-			}
+			checkNewEmails(acc)
 		case <-acc.stopChan:
 			log.Printf("[%s] Monitor stopped", acc.Email)
 			return
@@ -338,19 +1087,19 @@ func startMonitoring(acc *AccountConfig) {
 func checkNewEmails(acc *AccountConfig) error {
 	c, err := connectToIMAP(acc)
 	if err != nil {
-		return fmt.Errorf("failed to connect: %v", err)
+		log.Printf("[%s] Connect error: %v", acc.Email, err)
+		return err
 	}
 	defer c.Logout()
 
 	folders := getFoldersToCheck(acc, c)
-
 	totalUnread := 0
 	newNotifications := false
 
 	for _, folder := range folders {
 		mbox, err := c.Select(folder, false)
 		if err != nil {
-			log.Printf("[%s] Failed to select folder %s: %v", acc.Email, folder, err)
+			log.Printf("[%s] Select %s error: %v", acc.Email, folder, err)
 			continue
 		}
 
@@ -363,12 +1112,7 @@ func checkNewEmails(acc *AccountConfig) error {
 		criteria := imap.NewSearchCriteria()
 		criteria.WithoutFlags = []string{imap.SeenFlag}
 		ids, err := c.Search(criteria)
-		if err != nil {
-			log.Printf("[%s] Failed to search in %s: %v", acc.Email, folder, err)
-			continue
-		}
-
-		if len(ids) == 0 {
+		if err != nil || len(ids) == 0 {
 			continue
 		}
 
@@ -376,20 +1120,9 @@ func checkNewEmails(acc *AccountConfig) error {
 		seqset.AddNum(ids...)
 
 		messages := make(chan *imap.Message, len(ids))
-		section := &imap.BodySectionName{
-			BodyPartName: imap.BodyPartName{},
-			Peek:         true,
-		}
-
-		items := []imap.FetchItem{
-			imap.FetchEnvelope,
-			imap.FetchUid,
-			section.FetchItem(),
-		}
-
 		done := make(chan error, 1)
 		go func() {
-			done <- c.Fetch(seqset, items, messages)
+			done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope, imap.FetchUid}, messages)
 		}()
 
 		for msg := range messages {
@@ -409,23 +1142,33 @@ func checkNewEmails(acc *AccountConfig) error {
 				}
 			}
 		}
-
-		if err := <-done; err != nil {
-			log.Printf("[%s] Failed to fetch from %s: %v", acc.Email, folder, err)
-		}
+		<-done
 	}
 
 	acc.mu.Lock()
 	acc.lastCheckTime = time.Now()
 	acc.unreadCount = totalUnread
 	acc.mu.Unlock()
-	updateAccountMenuItem(acc)
 
 	if newNotifications {
 		saveNotifiedEmails(acc)
 	}
 
 	return nil
+}
+
+func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
+	c, err := client.DialTLS(fmt.Sprintf("%s:%d", acc.Server, acc.Port), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.Login(acc.Username, acc.Password); err != nil {
+		c.Logout()
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func getFoldersToCheck(acc *AccountConfig, c *client.Client) []string {
@@ -461,131 +1204,9 @@ func listFolders(c *client.Client) []string {
 	for m := range mailboxes {
 		folders = append(folders, m.Name)
 	}
-
-	if err := <-done; err != nil {
-		log.Printf("Error listing folders: %v", err)
-	}
+	<-done
 
 	return folders
-}
-
-func listAllFolders() {
-	type FolderInfo struct {
-		Account string   `json:"account"`
-		Folders []string `json:"folders"`
-	}
-
-	var allFolders []FolderInfo
-
-	for i := range config.Accounts {
-		acc := &config.Accounts[i]
-		c, err := connectToIMAP(acc)
-		if err != nil {
-			log.Printf("[%s] Failed to connect: %v", acc.Email, err)
-			continue
-		}
-
-		folders := listFolders(c)
-		c.Logout()
-
-		allFolders = append(allFolders, FolderInfo{
-			Account: acc.Email,
-			Folders: folders,
-		})
-
-		log.Printf("[%s] Found %d folders", acc.Email, len(folders))
-	}
-
-	data, err := json.MarshalIndent(allFolders, "", "  ")
-	if err != nil {
-		log.Printf("Failed to marshal folder list: %v", err)
-		beeep.Alert("Email Monitor", "Failed to save folder list", "")
-		return
-	}
-
-	if err := os.WriteFile(foldersListFile, data, 0644); err != nil {
-		log.Printf("Failed to write folder list: %v", err)
-		beeep.Alert("Email Monitor", "Failed to save folder list", "")
-		return
-	}
-
-	message := fmt.Sprintf("Folder list saved to:\n%s\n\nTotal accounts: %d", foldersListFile, len(allFolders))
-	beeep.Notify("📁 Folder List Saved", message, "")
-}
-
-func viewSavedFolderList() {
-	if _, err := os.Stat(foldersListFile); os.IsNotExist(err) {
-		beeep.Alert("Email Monitor", "No saved folder list found.\nUse 'List All Folders' first.", "")
-		return
-	}
-
-	data, err := os.ReadFile(foldersListFile)
-	if err != nil {
-		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to read folder list: %v", err), "")
-		return
-	}
-
-	type FolderInfo struct {
-		Account string   `json:"account"`
-		Folders []string `json:"folders"`
-	}
-
-	var allFolders []FolderInfo
-	if err := json.Unmarshal(data, &allFolders); err != nil {
-		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to parse folder list: %v", err), "")
-		return
-	}
-
-	message := fmt.Sprintf("Folder list location:\n%s\n\n", foldersListFile)
-
-	for _, info := range allFolders {
-		message += fmt.Sprintf("%s (%d folders):\n", info.Account, len(info.Folders))
-		for i, folder := range info.Folders {
-			if i >= 5 {
-				message += fmt.Sprintf("  ... and %d more\n", len(info.Folders)-5)
-				break
-			}
-			message += fmt.Sprintf("  • %s\n", folder)
-		}
-		message += "\n"
-	}
-
-	beeep.Notify("📁 Saved Folder List", message, "")
-}
-
-func showFilePaths() {
-	message := fmt.Sprintf(
-		"Application Directory:\n%s\n\nConfig: %s\n\nLog: %s\n\nFolder List: %s\n\nHistory: %s",
-		appDir,
-		configFile,
-		logFile,
-		foldersListFile,
-		historyDir,
-	)
-
-	beeep.Notify("📂 File Locations", message, "")
-}
-
-func openAppDirectory() {
-	// This will show a notification with the path
-	// Users can manually open it from there
-	message := fmt.Sprintf("Application directory:\n%s\n\nOpen this location in your file manager.", appDir)
-	beeep.Notify("📂 Application Directory", message, "")
-	log.Printf("App directory requested: %s", appDir)
-}
-
-func connectToIMAP(acc *AccountConfig) (*client.Client, error) {
-	c, err := client.DialTLS(fmt.Sprintf("%s:%d", acc.Server, acc.Port), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.Login(acc.Username, acc.Password); err != nil {
-		c.Logout()
-		return nil, err
-	}
-
-	return c, nil
 }
 
 func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
@@ -598,14 +1219,12 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 
 	for _, excludeEmail := range acc.ExcludeEmail {
 		if strings.EqualFold(senderEmail, excludeEmail) {
-			log.Printf("[%s] Filtered out (exclude email): %s", acc.Email, senderEmail)
 			return false
 		}
 	}
 
 	for _, keyword := range acc.ExcludeKeyword {
 		if strings.Contains(subject, strings.ToLower(keyword)) {
-			log.Printf("[%s] Filtered out (exclude keyword '%s'): %s", acc.Email, keyword, subject)
 			return false
 		}
 	}
@@ -614,15 +1233,10 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 
 	if hasIncludeFilters {
 		if len(acc.IncludeEmail) > 0 {
-			emailMatch := false
 			for _, includeEmail := range acc.IncludeEmail {
 				if strings.EqualFold(senderEmail, includeEmail) {
-					emailMatch = true
-					break
+					return true
 				}
-			}
-			if emailMatch {
-				return true
 			}
 		}
 
@@ -634,134 +1248,10 @@ func applyFilters(acc *AccountConfig, env *imap.Envelope) bool {
 			}
 		}
 
-		log.Printf("[%s] Filtered out (no include match): %s - %s", acc.Email, senderEmail, subject)
 		return false
 	}
 
 	return true
-}
-
-func updateAccountMenuItem(acc *AccountConfig) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if item, exists := accountMenuItems[acc.Email]; exists {
-		acc.mu.RLock()
-		menuText := fmt.Sprintf("📧 %s - Unread: %d (Last: %s)",
-			acc.Email,
-			acc.unreadCount,
-			acc.lastCheckTime.Format("15:04:05"))
-		acc.mu.RUnlock()
-		item.SetTitle(menuText)
-	}
-}
-
-func checkAllAccounts() {
-	var wg sync.WaitGroup
-	for i := range config.Accounts {
-		wg.Add(1)
-		go func(acc *AccountConfig) {
-			defer wg.Done()
-			if err := checkNewEmails(acc); err != nil {
-				log.Printf("[%s] Manual check error: %v", acc.Email, err)
-			}
-		}(&config.Accounts[i])
-	}
-	wg.Wait()
-	beeep.Notify("Email Monitor", "Manual check completed for all accounts", "")
-}
-
-func clearAllHistory() {
-	for i := range config.Accounts {
-		config.Accounts[i].mu.Lock()
-		config.Accounts[i].notifiedEmails = make(map[string]bool)
-		config.Accounts[i].mu.Unlock()
-		saveNotifiedEmails(&config.Accounts[i])
-	}
-	beeep.Notify("Email Monitor", "All notification history cleared", "")
-}
-
-func restartAllMonitors() {
-	for i := range config.Accounts {
-		config.Accounts[i].stopChan <- true
-		time.Sleep(100 * time.Millisecond)
-		config.Accounts[i].stopChan = make(chan bool)
-		go startMonitoring(&config.Accounts[i])
-	}
-	beeep.Notify("Email Monitor", "All monitors restarted", "")
-}
-
-func reloadConfiguration() {
-	if err := loadConfig(); err != nil {
-		beeep.Alert("Email Monitor", fmt.Sprintf("Failed to reload config: %v", err), "")
-		return
-	}
-	restartAllMonitors()
-	beeep.Notify("Email Monitor", "Configuration reloaded", "")
-}
-
-func generateEmailID(folder string, uid uint32, messageID string) string {
-	if messageID != "" {
-		return fmt.Sprintf("%s-%d-%s", folder, uid, messageID)
-	}
-	return fmt.Sprintf("%s-%d", folder, uid)
-}
-
-func loadNotifiedEmails(acc *AccountConfig) {
-	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
-	file, err := os.ReadFile(filename)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[%s] Warning: failed to load notified emails: %v", acc.Email, err)
-		}
-		return
-	}
-
-	var emails []string
-	if err := json.Unmarshal(file, &emails); err != nil {
-		log.Printf("[%s] Warning: failed to parse notified emails: %v", acc.Email, err)
-		return
-	}
-
-	for _, email := range emails {
-		acc.notifiedEmails[email] = true
-	}
-}
-
-func cleanupOldNotifications(acc *AccountConfig) {
-	if len(acc.notifiedEmails) > acc.CheckHistory {
-		log.Printf("[%s] Cleaning up history (current: %d, max: %d)", acc.Email, len(acc.notifiedEmails), acc.CheckHistory)
-		count := 0
-		for k := range acc.notifiedEmails {
-			if count > acc.CheckHistory/2 {
-				break
-			}
-			delete(acc.notifiedEmails, k)
-			count++
-		}
-		saveNotifiedEmails(acc)
-	}
-}
-
-func saveNotifiedEmails(acc *AccountConfig) error {
-	acc.mu.RLock()
-	emails := make([]string, 0, len(acc.notifiedEmails))
-	for email := range acc.notifiedEmails {
-		emails = append(emails, email)
-	}
-	acc.mu.RUnlock()
-
-	data, err := json.MarshalIndent(emails, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
-	return os.WriteFile(filename, data, 0644)
-}
-
-func sanitizeFilename(s string) string {
-	return strings.ReplaceAll(s, "@", "_at_")
 }
 
 func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
@@ -772,10 +1262,10 @@ func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 		} else if env.From[0].PersonalName != "" {
 			sender = env.From[0].PersonalName
 		} else {
-			sender = "Unknown Sender"
+			sender = "Unknown"
 		}
 	} else {
-		sender = "Unknown Sender"
+		sender = "Unknown"
 	}
 
 	subject := env.Subject
@@ -799,12 +1289,103 @@ func showNotification(acc *AccountConfig, folder string, env *imap.Envelope) {
 	}
 
 	if err != nil {
-		log.Printf("[%s] Failed to send notification: %v", acc.Email, err)
+		log.Printf("[%s] Notification error: %v", acc.Email, err)
 	}
 
 	log.Printf("[%s][%s] NEW EMAIL - From: %s | Subject: %s", acc.Email, folder, sender, subject)
-	fmt.Printf("\n[%s][%s] 📧 NEW EMAIL\n", acc.Email, folder)
-	fmt.Printf("From: %s\nSubject: %s\nTime: %s\n\n", sender, subject, time.Now().Format("15:04:05"))
+}
+
+func generateEmailID(folder string, uid uint32, messageID string) string {
+	if messageID != "" {
+		return fmt.Sprintf("%s-%d-%s", folder, uid, messageID)
+	}
+	return fmt.Sprintf("%s-%d", folder, uid)
+}
+
+func loadNotifiedEmails(acc *AccountConfig) {
+	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
+	file, err := os.ReadFile(filename)
+	if err != nil {
+		return
+	}
+
+	var emails []string
+	if err := json.Unmarshal(file, &emails); err != nil {
+		return
+	}
+
+	for _, email := range emails {
+		acc.notifiedEmails[email] = true
+	}
+}
+
+func saveNotifiedEmails(acc *AccountConfig) error {
+	acc.mu.RLock()
+	emails := make([]string, 0, len(acc.notifiedEmails))
+	for email := range acc.notifiedEmails {
+		emails = append(emails, email)
+	}
+	acc.mu.RUnlock()
+
+	data, err := json.MarshalIndent(emails, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	filename := filepath.Join(historyDir, sanitizeFilename(acc.Email)+".json")
+	return os.WriteFile(filename, data, 0644)
+}
+
+func cleanupOldNotifications(acc *AccountConfig) {
+	if len(acc.notifiedEmails) > acc.CheckHistory {
+		log.Printf("[%s] Cleanup history (current: %d, max: %d)", acc.Email, len(acc.notifiedEmails), acc.CheckHistory)
+		count := 0
+		for k := range acc.notifiedEmails {
+			if count > acc.CheckHistory/2 {
+				break
+			}
+			delete(acc.notifiedEmails, k)
+			count++
+		}
+		saveNotifiedEmails(acc)
+	}
+}
+
+func sanitizeFilename(s string) string {
+	return strings.ReplaceAll(s, "@", "_at_")
+}
+
+func checkAllAccounts() {
+	var wg sync.WaitGroup
+	for i := range config.Accounts {
+		wg.Add(1)
+		go func(acc *AccountConfig) {
+			defer wg.Done()
+			checkNewEmails(acc)
+		}(&config.Accounts[i])
+	}
+	wg.Wait()
+	beeep.Notify("Email Monitor", "Manual check completed", "")
+}
+
+func clearAllHistory() {
+	for i := range config.Accounts {
+		config.Accounts[i].mu.Lock()
+		config.Accounts[i].notifiedEmails = make(map[string]bool)
+		config.Accounts[i].mu.Unlock()
+		saveNotifiedEmails(&config.Accounts[i])
+	}
+	beeep.Notify("Email Monitor", "History cleared", "")
+}
+
+func restartAllMonitors() {
+	for i := range config.Accounts {
+		config.Accounts[i].stopChan <- true
+		time.Sleep(100 * time.Millisecond)
+		config.Accounts[i].stopChan = make(chan bool)
+		go startMonitoring(&config.Accounts[i])
+	}
+	beeep.Notify("Email Monitor", "Monitors restarted", "")
 }
 
 func getIconData() []byte {
@@ -815,6 +1396,12 @@ func getIconData() []byte {
 	}
 
 	return []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x16,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0xC4, 0xB4, 0x6C, 0x3B, 0x00, 0x00, 0x00,
+		0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00, 0x0B, 0x13, 0x00, 0x00, 0x0B,
+		0x13, 0x01, 0x00, 0x9A, 0x9C, 0x18, 0x00, 0x00, 0x00, 0xDA, 0x49, 0x44,
+		0x41, 0x54, 0x48, 0x4B, 0xED, 0x95, 0x4D, 0x0A, 0x82, 0x40, 0x10, 0x46,
 		0xDF, 0x9A, 0xB4, 0x87, 0xE0, 0x0D, 0xBC, 0x86, 0x17, 0xF0, 0x1A, 0x5E,
 		0xC2, 0x95, 0xBC, 0x80, 0xE0, 0x0D, 0x3C, 0x80, 0x17, 0x50, 0xA8, 0x20,
 		0x08, 0x82, 0x20, 0x08, 0x82, 0x68, 0x30, 0x99, 0x49, 0x67, 0x32, 0x99,

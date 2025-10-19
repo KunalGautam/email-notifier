@@ -1,30 +1,52 @@
-# 📧 Email Monitor
+<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
 
-A powerful, cross-platform email notification monitor with system tray integration. Monitor multiple email accounts simultaneously with advanced filtering rules and folder management.
+# Write a readme.md file for following code
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/go-%3E%3D1.19-blue)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+Based on the code analysis, I can now create a comprehensive README.md file for this email monitoring application.
 
-## ✨ Features
+# Email Monitor
 
-- 🔔 **Real-time Desktop Notifications** - Native system notifications for new emails
-- 📬 **Multiple Account Support** - Monitor unlimited email accounts simultaneously
-- 🎯 **Advanced Filtering** - Keyword and sender-based filters (include/exclude)
-- 📁 **Folder Management** - Monitor all folders, specific folders, or exclude folders
-- 🔄 **Auto-refresh** - Configurable check intervals per account
-- 🗂️ **Smart Tracking** - Never get duplicate notifications
-- 🎨 **System Tray Integration** - Runs quietly in the background
-- 📊 **Real-time Status** - See unread count and last check time
-- 🔍 **Folder Discovery** - List and save all available folders
-- 📝 **Comprehensive Logging** - Track all activities
-- 💾 **OS-Standard Storage** - Files stored in proper OS directories
+A lightweight system tray application for monitoring multiple email accounts with support for **IMAP** and **POP3** protocols. Built with Go, it features desktop notifications, advanced filtering, and a web-based dashboard for easy management.[^1]
 
-## 🖥️ Supported Platforms
+## Features
 
-- ✅ Linux (X11 and Wayland)
-- ✅ macOS
-- ✅ Windows
+### Core Functionality
+
+- **Multi-account support** - Monitor multiple email accounts simultaneously with independent configurations[^1]
+- **Dual protocol support** - Works with both IMAP and POP3 email servers[^1]
+- **System tray integration** - Runs quietly in the background with unread count display[^1]
+- **Desktop notifications** - Instant alerts for new emails matching your filters[^1]
+- **Web dashboard** - Browser-based interface for configuration and monitoring[^1]
+
+
+### Security
+
+- **Secure password storage** - Passwords are stored in your system's keyring (Keychain on macOS, Secret Service on Linux, Credential Manager on Windows)[^1]
+- **Automatic migration** - Converts plaintext passwords from config to keyring on first run[^1]
+
+
+### Filtering Options
+
+- **Keyword filtering** - Include or exclude emails based on subject/body keywords[^1]
+- **Sender filtering** - Include or exclude specific email addresses[^1]
+- **Folder filtering** - Monitor all folders, specific folders, or exclude certain folders[^1]
+- **Notification history** - Prevents duplicate notifications with configurable history limit[^1]
+
+
+### Monitoring Features
+
+- **Configurable check intervals** - Set custom polling intervals per account[^1]
+- **Real-time status** - View unread count and last check time for each account[^1]
+- **Manual checking** - Trigger immediate checks for all accounts[^1]
+- **Connection testing** - Verify credentials and server settings before saving[^1]
+
+
+## Installation
+
+### Prerequisites
+
+- Go 1.25.3 or higher[^1]
+- System keyring support (most modern operating systems have this built-in)[^1]
 
 ## 📋 Requirements
 
@@ -45,699 +67,208 @@ sudo pacman -S gtk3 libayatana-appindicator
 ### macOS & Windows
 No additional dependencies required!
 
-## 🚀 Installation
 
-### Option 1: Build from Source
+### Build from Source
 
 ```bash
-# Clone the repository
 git clone https://git.mydustb.in/KunalGautam/email-notifier
 cd email-monitor
-
-# Install dependencies
-go mod download
-
-# Build
-go build -o email-monitor
-
-# Run
-./email-monitor
+go build -o email-monitor main.go
 ```
 
-### Option 2: Download Binary
 
-Download the latest release from the [Releases](https://git.mydustb.in/KunalGautam/email-notifier) page.
+### Dependencies
 
-## 📂 File Locations
+The application uses the following Go packages:[^1]
 
-Email Monitor follows OS-specific conventions for storing configuration and data files:
+- `github.com/emersion/go-imap` - IMAP client library
+- `github.com/knadh/go-pop3` - POP3 client library
+- `github.com/gen2brain/beeep` - Desktop notifications
+- `github.com/getlantern/systray` - System tray integration
+- `github.com/zalando/go-keyring` - Secure password storage
 
-### Linux
-```
-~/.config/email-monitor/
-├── config.json
-├── email-monitor.log
-├── folders_list.json
-├── icon.png (optional)
-└── notification_history/
-    ├── user1_at_example.com.json
-    └── user2_at_gmail.com.json
-```
+Install dependencies with:
 
-### macOS
-```
-~/Library/Application Support/email-monitor/
-├── config.json
-├── email-monitor.log
-├── folders_list.json
-├── icon.png (optional)
-└── notification_history/
-```
-
-### Windows
-```
-%APPDATA%\email-monitor\
-├── config.json
-├── email-monitor.log
-├── folders_list.json
-├── icon.png (optional)
-└── notification_history\
-```
-
-**Finding Your Files:**
-- Right-click the tray icon → "Open App Directory"
-- Or check the console output when starting the application
-
-## ⚙️ Configuration
-
-On first run, `config.json` will be created automatically in the appropriate OS directory. The application will show you the exact location.
-
-### Editing Configuration
-
-**Linux/macOS:**
 ```bash
-# Edit config
-nano ~/.config/email-monitor/config.json
-# or on macOS
-nano ~/Library/Application\ Support/email-monitor/config.json
+go mod download
 ```
 
-**Windows:**
-```cmd
-notepad %APPDATA%\email-monitor\config.json
-```
 
-### Configuration Example
+## Configuration
+
+### First Run
+
+On first launch, the application creates a sample configuration file at:[^1]
+
+- **Linux:** `~/.config/email-monitor/config.json`
+- **macOS:** `~/Library/Application Support/email-monitor/config.json`
+- **Windows:** `%APPDATA%\email-monitor\config.json`
+
+
+### Configuration File Structure
 
 ```json
 {
   "accounts": [
     {
-      "email": "work@company.com",
-      "server": "imap.gmail.com",
+      "email": "user@example.com",
+      "server": "imap.example.com",
       "port": 993,
-      "username": "work@company.com",
-      "password": "your-app-password",
+      "username": "user@example.com",
       "protocol": "imap",
-      "include_keyword": ["urgent", "invoice"],
-      "exclude_keyword": ["promotion", "newsletter"],
-      "include_email": ["boss@company.com"],
-      "exclude_email": ["spam@example.com"],
+      "include_keyword": [],
+      "exclude_keyword": [],
+      "include_email": [],
+      "exclude_email": [],
       "check_interval": 120,
       "check_history": 1000,
       "enable_notification_sound": true,
       "folder_mode": "all",
-      "include_folders": ["INBOX", "Work"],
-      "exclude_folders": ["Spam", "Trash"]
-    },
-    {
-      "email": "personal@gmail.com",
-      "server": "imap.gmail.com",
-      "port": 993,
-      "username": "personal@gmail.com",
-      "password": "your-app-password",
-      "protocol": "imap",
-      "include_keyword": [],
-      "exclude_keyword": ["social", "promotion"],
-      "include_email": [],
-      "exclude_email": [],
-      "check_interval": 60,
-      "check_history": 500,
-      "enable_notification_sound": false,
-      "folder_mode": "exclude",
       "include_folders": [],
-      "exclude_folders": ["Spam", "Trash", "Promotions"]
+      "exclude_folders": []
     }
   ]
 }
 ```
 
+
 ### Configuration Options
 
-| Option | Type | Description | Default |
-|--------|------|-------------|---------|
-| `email` | string | Email address for display | Required |
-| `server` | string | IMAP server address | Required |
-| `port` | int | IMAP port (usually 993) | Required |
-| `username` | string | Login username | Required |
-| `password` | string | Login password | Required |
-| `protocol` | string | Protocol (currently only "imap") | `"imap"` |
-| `check_interval` | int | Seconds between checks | `120` |
-| `check_history` | int | Max notification history | `1000` |
-| `enable_notification_sound` | bool | Play sound with notifications | `true` |
-| `folder_mode` | string | Folder checking mode (see below) | `"all"` |
-| `include_folders` | array | Folders to include (if mode is "include") | `[]` |
-| `exclude_folders` | array | Folders to exclude (if mode is "exclude") | `[]` |
-| `include_keyword` | array | Only notify if subject contains these | `[]` |
-| `exclude_keyword` | array | Don't notify if subject contains these | `[]` |
-| `include_email` | array | Only notify from these senders | `[]` |
-| `exclude_email` | array | Don't notify from these senders | `[]` |
+**Account Settings:**
 
-### Folder Modes
+- `email` - Email address for display purposes[^1]
+- `server` - Mail server hostname[^1]
+- `port` - Server port (typically 993 for IMAP, 995 for POP3)[^1]
+- `username` - Login username[^1]
+- `protocol` - Either "imap" or "pop3"[^1]
 
-#### 1. Check All Folders (`"all"`)
-```json
-"folder_mode": "all"
-```
-Monitors all folders in the mailbox.
+**Filtering:**
 
-#### 2. Include Specific Folders (`"include"`)
-```json
-"folder_mode": "include",
-"include_folders": ["INBOX", "Work", "Important"]
-```
-Only monitors the specified folders. Use this when you only want to monitor a few specific folders.
+- `include_keyword` - Only notify for emails containing these keywords[^1]
+- `exclude_keyword` - Skip emails containing these keywords[^1]
+- `include_email` - Only notify for emails from these senders[^1]
+- `exclude_email` - Skip emails from these senders[^1]
 
-#### 3. Exclude Folders (`"exclude"`)
-```json
-"folder_mode": "exclude",
-"exclude_folders": ["Spam", "Trash", "Drafts", "Sent"]
-```
-Monitors all folders except the specified ones. Use this when you want to monitor most folders but skip a few.
+**Monitoring:**
 
-## 🔐 Email Provider Setup
+- `check_interval` - Seconds between checks (default: 120)[^1]
+- `check_history` - Number of recent emails to check (default: 1000)[^1]
+- `enable_notification_sound` - Play sound with notifications[^1]
 
-### Gmail
-1. Enable IMAP in Gmail settings
-2. Create an [App Password](https://support.google.com/accounts/answer/185833)
-3. Use settings:
-   - Server: `imap.gmail.com`
-   - Port: `993`
-   - Password: Your app password (not your Gmail password)
+**Folder Settings (IMAP only):**
 
-### Outlook/Office 365
-- Server: `outlook.office365.com`
-- Port: `993`
-- Username: Your full email address
-- Password: Your account password
+- `folder_mode` - "all", "include", or "exclude"[^1]
+- `include_folders` - Folders to monitor when mode is "include"[^1]
+- `exclude_folders` - Folders to skip when mode is "exclude"[^1]
 
-### Yahoo Mail
-1. Enable IMAP in Yahoo Mail settings
-2. Generate an app password
-3. Use settings:
-   - Server: `imap.mail.yahoo.com`
-   - Port: `993`
 
-### Other Providers
-Check your email provider's IMAP settings documentation.
+### Password Management
 
-## 🎮 Usage
+Passwords are **NOT** stored in the configuration file. Use the web dashboard to set passwords, which are securely stored in your system keyring.[^1]
 
-### Starting the Monitor
+## Usage
+
+### Running the Application
 
 ```bash
 ./email-monitor
 ```
 
-On first run, you'll see:
-```
-📁 Email Monitor
-Application directory: /home/user/.config/email-monitor
+The application will:
 
-✅ Sample config created: /home/user/.config/email-monitor/config.json
-Please edit it with your email settings and restart.
-```
+1. Start as a system tray icon with unread count display[^1]
+2. Launch a local web server for the dashboard[^1]
+3. Begin monitoring configured accounts at specified intervals[^1]
 
-The application will minimize to your system tray.
+### Web Dashboard
+
+Click **"Open Dashboard"** in the system tray menu to access the web interface. The dashboard allows you to:[^1]
+
+- Add, edit, and delete email accounts[^1]
+- Set passwords securely[^1]
+- Test connection settings[^1]
+- Fetch available folders (IMAP)[^1]
+- View real-time status and unread counts[^1]
+- Trigger manual email checks[^1]
+- Clear notification history[^1]
+
 
 ### System Tray Menu
 
-Right-click the tray icon to access:
+- **Open Dashboard** - Launch the web interface[^1]
+- **Check All Accounts** - Manually trigger immediate check[^1]
+- **Per-account items** - Show unread count for each account[^1]
+- **Quit** - Stop monitoring and exit[^1]
 
-#### Account Status
-- **✅ Status: Running** - Current monitor status
-- **📧 Account Info** - Shows unread count and last check time per account
-  - Format: `📧 user@example.com - Unread: 5 (Last: 14:32:15)`
 
-#### Actions
-- **🔍 Check All Now** - Manually check all accounts immediately
-- **🗑️ Clear All History** - Reset notification tracking for all accounts
-
-#### Folder Management
-- **📁 Folder Management**
-  - **📋 List All Folders** - Retrieve and save complete folder list from all accounts
-  - **👁️ View Saved Folder List** - Display previously saved folders
+## API Endpoints
 
-#### System
-- **🔄 Restart Monitor** - Restart email monitoring for all accounts
-- **⚙️ Reload Config** - Reload configuration file without restarting app
-- **📂 Open App Directory** - Show the application directory path
-- **📄 View File Locations** - Display all file paths
-- **❌ Exit** - Close the application
+The web server exposes these REST endpoints:[^1]
 
-### Command Line Options
+- `GET /` - Dashboard interface
+- `GET /api/accounts` - List all accounts
+- `POST /api/accounts/add` - Add new account
+- `POST /api/accounts/update` - Update existing account
+- `POST /api/accounts/delete` - Remove account
+- `POST /api/accounts/test` - Test connection
+- `POST /api/accounts/folders` - Fetch IMAP folders
+- `GET /api/status` - Get monitoring status
+- `POST /api/check-all` - Trigger manual check
+- `POST /api/clear-history` - Clear notification history
+- `POST /api/restart` - Restart application
 
-```bash
-# Run in foreground with console output
-./email-monitor
 
-# Run in background (Linux/macOS)
-./email-monitor &
+## File Locations
 
-# Stop background process
-pkill email-monitor
-```
+All application data is stored in the platform-specific configuration directory:[^1]
 
-### Finding Your Files
+- `config.json` - Account configuration (passwords excluded)
+- `email-monitor.log` - Application logs
+- `folders_list.json` - Cached IMAP folder lists
+- `notification_history/` - Notification tracking to prevent duplicates
 
-The easiest way to find your configuration and logs:
 
-1. **From the tray menu:**
-   - Right-click tray icon → "Open App Directory"
-   - Or: "View File Locations" to see all paths
+## Troubleshooting
 
-2. **From terminal:**
-```bash
-# Linux
-ls -la ~/.config/email-monitor/
+### Connection Issues
 
-# macOS
-ls -la ~/Library/Application\ Support/email-monitor/
+- Verify server address and port are correct[^1]
+- Use the "Test Connection" button in the dashboard[^1]
+- Check if your email provider requires app-specific passwords
+- Ensure firewall allows outbound connections on the specified port
 
-# Windows
-dir %APPDATA%\email-monitor
-```
 
-## 🔧 Advanced Features
+### No Notifications
 
-### Discovering Available Folders
+- Check filter settings aren't too restrictive[^1]
+- Verify `check_interval` isn't too high[^1]
+- Review logs in `email-monitor.log`[^1]
+- Clear notification history if emails were already notified[^1]
 
-Before setting up folder filters, you can discover all available folders:
 
-1. Start the application
-2. Right-click tray icon → "Folder Management" → "List All Folders"
-3. Wait for the notification confirming the list is saved
-4. View the list: "Folder Management" → "View Saved Folder List"
+### Password Issues
 
-The folder list is saved to `folders_list.json` and includes all folders for all configured accounts.
+- Re-enter password through the web dashboard[^1]
+- Ensure system keyring is accessible
+- Check logs for keyring-related errors[^1]
 
-### Filter Rules Priority
 
-Filters are applied in this order:
-1. **Exclude Email** - Blocks specific senders (highest priority)
-2. **Exclude Keywords** - Blocks subjects with certain words
-3. **Include Email** - Allows specific senders (if any include filters are set)
-4. **Include Keywords** - Allows subjects with certain words (if any include filters are set)
+## Platform Support
 
-**Important:** If you set any include filters (email or keyword), ONLY emails matching those filters will notify. This is useful for high-priority monitoring.
+- **Linux** - Full support with system keyring integration[^1]
+- **macOS** - Full support with Keychain integration[^1]
+- **Windows** - Full support with Credential Manager integration[^1]
 
-### Example Filter Scenarios
 
-#### Monitor Only Important Work Emails
-```json
-"include_keyword": ["urgent", "important", "invoice", "action required"],
-"exclude_keyword": ["out of office", "automated"],
-"folder_mode": "include",
-"include_folders": ["INBOX", "Work"]
-```
-
-#### Block All Marketing/Promotions
-```json
-"exclude_keyword": ["unsubscribe", "promotion", "advertisement", "newsletter"],
-"exclude_folders": ["Promotions", "Social", "Updates"],
-"folder_mode": "exclude"
-```
-
-#### VIP Senders Only
-```json
-"include_email": ["boss@company.com", "ceo@company.com", "client@important.com"],
-"exclude_keyword": ["automated", "no-reply"],
-"folder_mode": "all"
-```
-
-#### Personal Account - No Spam
-```json
-"exclude_email": ["noreply@", "marketing@"],
-"exclude_keyword": ["unsubscribe", "opt-out"],
-"exclude_folders": ["Spam", "Trash", "Promotions", "Social"],
-"folder_mode": "exclude"
-```
-
-## 📊 Understanding Unread Count
-
-The unread count shown in the tray menu represents:
-- **Total unread emails** across all monitored folders
-- Updated after each check cycle
-- Respects your folder mode settings (all/include/exclude)
-
-Example: If you're monitoring 3 folders and have 2, 3, and 1 unread emails respectively, the count will show 6.
-
-## 🐛 Troubleshooting
-
-### No Tray Icon on Linux (Wayland)
-
-Wayland has limited system tray support. Solutions:
-
-1. **Install GNOME Shell Extension** (GNOME):
-   - [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
-   - TopIcons Plus
-
-2. **Use KDE Plasma** - Has native tray support on Wayland
-
-3. **Switch to X11 session** temporarily
-
-4. The application still works! Check logs and use "Check All Now" for manual checks.
-
-### Configuration File Not Found
-
-The config file should be created automatically. If it's missing:
-
-```bash
-# Check if directory exists
-ls ~/.config/email-monitor/  # Linux
-ls ~/Library/Application\ Support/email-monitor/  # macOS
-dir %APPDATA%\email-monitor  # Windows
-
-# If missing, run the app once to create it
-./email-monitor
-```
-
-### Connection Errors
-
-```
-[user@example.com] Error: failed to connect: dial tcp: lookup imap.example.com: no such host
-```
-
-**Solutions:**
-- Verify IMAP is enabled in your email account settings
-- Check firewall isn't blocking port 993
-- Ensure correct server address (check your provider's documentation)
-- Verify credentials are correct
-- For Gmail, ensure you're using an App Password, not your regular password
-- Try connecting manually using an IMAP client to verify settings
-
-### No Notifications Appearing
-
-**Check System Notifications:**
-```bash
-# Test if notifications work
-notify-send "Test" "This is a test notification"  # Linux
-```
-
-**Verify Settings:**
-1. Check `enable_notification_sound` is `true` in config
-2. Ensure notification filters aren't blocking all emails
-3. Check system notification settings (Do Not Disturb mode?)
-4. Review logs for errors: `tail -f ~/.config/email-monitor/email-monitor.log`
-
-### Incorrect Unread Count
-
-**Possible causes:**
-- `folder_mode` excludes folders with unread emails
-- IMAP server reporting incorrect counts
-- Multiple devices marking emails as read
-
-**Solutions:**
-1. Use "List All Folders" to see all available folders
-2. Verify your `folder_mode` and folder lists
-3. Try "Check All Now" to force refresh
-4. Check logs for any folder access errors
-
-### Application Won't Start
-
-**Check logs:**
-```bash
-tail -50 ~/.config/email-monitor/email-monitor.log  # Linux/macOS
-type %APPDATA%\email-monitor\email-monitor.log  # Windows
-```
-
-**Common issues:**
-- Missing dependencies (Linux): Install GTK and AppIndicator libraries
-- Permission issues: Ensure the application has execute permissions
-- Port already in use: Check if another instance is running
-
-### High CPU Usage
-
-**Optimization tips:**
-- Increase `check_interval` (e.g., 300 seconds for 5-minute checks)
-- Use `folder_mode: "include"` to monitor only essential folders
-- Reduce number of monitored accounts
-- Use exclude filters to skip large folders (Sent, All Mail)
-
-## 🔄 Running at Startup
-
-### Linux (systemd)
-
-Create `~/.config/systemd/user/email-monitor.service`:
-
-```ini
-[Unit]
-Description=Email Notification Monitor
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/email-monitor
-Restart=on-failure
-RestartSec=10
-Environment=DISPLAY=:0
-
-[Install]
-WantedBy=default.target
-```
-
-**Note:** Update `ExecStart` with the full path to your binary:
-```bash
-# Find full path
-which email-monitor
-# or
-readlink -f ./email-monitor
-```
-
-Enable and start:
-```bash
-systemctl --user daemon-reload
-systemctl --user enable email-monitor.service
-systemctl --user start email-monitor.service
-systemctl --user status email-monitor.service
-```
-
-### macOS (launchd)
-
-Create `~/Library/LaunchAgents/com.user.email-monitor.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.user.email-monitor</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/email-monitor</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/email-monitor.out</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/email-monitor.err</string>
-</dict>
-</plist>
-```
-
-Load:
-```bash
-launchctl load ~/Library/LaunchAgents/com.user.email-monitor.plist
-launchctl start com.user.email-monitor
-```
-
-### Windows (Task Scheduler)
-
-1. Press `Win + R`, type `taskschd.msc`, press Enter
-2. Click "Create Basic Task"
-3. Name: "Email Monitor"
-4. Trigger: "When I log on"
-5. Action: "Start a program"
-6. Program: Browse to `email-monitor.exe`
-7. Finish
-
-**Alternative (Startup Folder):**
-1. Press `Win + R`, type `shell:startup`, press Enter
-2. Create a shortcut to `email-monitor.exe` in the opened folder
-
-## 📝 Logging
-
-Logs are automatically written to `email-monitor.log` in the application directory.
-
-### Viewing Logs
-
-**Linux/macOS:**
-```bash
-# View full log
-cat ~/.config/email-monitor/email-monitor.log
-
-# Follow log in real-time
-tail -f ~/.config/email-monitor/email-monitor.log
-
-# View last 50 lines
-tail -n 50 ~/.config/email-monitor/email-monitor.log
-
-# Search for errors
-grep ERROR ~/.config/email-monitor/email-monitor.log
-```
-
-**Windows:**
-```cmd
-type %APPDATA%\email-monitor\email-monitor.log
-```
-
-### Log Entries Include:
-- Application startup and configuration loading
-- Connection attempts and results
-- New email notifications sent
-- Filter applications (what was blocked/allowed)
-- Errors and warnings
-- Account status updates
-- Folder listing operations
-
-### Log Levels:
-- `INFO`: Normal operations
-- `WARNING`: Non-critical issues
-- `ERROR`: Problems that need attention
-
-## 🧹 Uninstalling
-
-### Complete Removal
-
-**Linux:**
-```bash
-# Stop the service if running
-systemctl --user stop email-monitor.service
-systemctl --user disable email-monitor.service
-rm ~/.config/systemd/user/email-monitor.service
-
-# Remove application files
-rm -rf ~/.config/email-monitor
-
-# Remove binary
-rm /usr/local/bin/email-monitor  # or wherever you installed it
-```
-
-**macOS:**
-```bash
-# Stop the service
-launchctl unload ~/Library/LaunchAgents/com.user.email-monitor.plist
-rm ~/Library/LaunchAgents/com.user.email-monitor.plist
-
-# Remove application files
-rm -rf ~/Library/Application\ Support/email-monitor
-
-# Remove binary
-rm /usr/local/bin/email-monitor
-```
-
-**Windows:**
-1. Remove from Task Scheduler or Startup folder
-2. Delete `%APPDATA%\email-monitor`
-3. Delete `email-monitor.exe`
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Contributing
 
-- [go-imap](https://github.com/emersion/go-imap) - IMAP client library
-- [beeep](https://github.com/gen2brain/beeep) - Cross-platform notifications
-- [systray](https://github.com/getlantern/systray) - System tray integration
+Contributions are welcome! Please submit issues and pull requests to the repository.
 
-## 📧 Support
+<div align="center">⁂</div>
 
-- **Issues**: [Issues](https://git.mydustb.in/KunalGautam/email-notifier/issues)
-- **WiKi**: [Wiki](https://git.mydustb.in/KunalGautam/email-notifier/wiki)
+[^1]: main.go
 
-## 🗺️ Roadmap
-
-- [ ] OAuth2 authentication support (Gmail, Outlook)
-- [ ] Web interface for configuration
-- [ ] GUI configuration editor
-- [ ] Email actions from notifications (mark as read, archive)
-- [ ] Custom notification templates
-- [ ] Multiple notification profiles (work hours, weekend)
-- [ ] Statistics and analytics dashboard
-- [ ] Secure password storage (system keyring integration)
-- [ ] POP3 protocol support
-- [ ] Email preview in notifications
-- [ ] Mobile companion app
-- [ ] System Keyring, instead of plaintext config file
-
-## ⚡ Performance Tips
-
-- Set reasonable `check_interval` (60-300 seconds recommended)
-- Use `folder_mode: "include"` to monitor only essential folders
-- Limit `check_history` to what you actually need (default 1000 is good)
-- Use exclude filters to skip spam/marketing folders
-- Monitor only essential accounts during work hours
-- Use exclude_folders for "All Mail", "Sent", "Drafts" (Gmail)
-
-## 🔒 Security Notes
-
-⚠️ **Important Security Considerations:**
-
-- Passwords are stored in **plain text** in `config.json`
-- The config file has standard file permissions (644 on Unix, normal on Windows)
-- **Best practices:**
-  - Use app-specific passwords when available (Gmail, Yahoo, etc.)
-  - Restrict `config.json` permissions: `chmod 600 ~/.config/email-monitor/config.json`
-  - Never commit `config.json` to version control
-  - Add `config.json` to `.gitignore` if developing
-  - Regularly rotate passwords
-  - Don't share your config file
-  - Consider encrypting your home directory (OS-level protection)
-
-**Future Improvement:** System keyring integration is planned for secure password storage.
-
-## 💡 Tips & Tricks
-
-### Temporary Disable Monitoring
-Instead of exiting, use "Clear All History" to reset and get notifications again later.
-
-### Testing Filters
-1. Set `check_interval` to 30 seconds for testing
-2. Send test emails to yourself
-3. Watch the logs: `tail -f ~/.config/email-monitor/email-monitor.log`
-4. Adjust filters based on results
-5. Increase `check_interval` back to 120-300 for production
-
-### Multiple Profiles
-You can run multiple instances with different configs:
-```bash
-# Copy the binary
-cp email-monitor email-monitor-work
-cp email-monitor email-monitor-personal
-
-# Each will use its own config directory based on the binary name
-# (requires minor code modification)
-```
-
-### Backup Your Settings
-```bash
-# Linux/macOS
-tar -czf email-monitor-backup.tar.gz ~/.config/email-monitor
-
-# Restore
-tar -xzf email-monitor-backup.tar.gz -C ~/
-```
-
----
-
-**Made with ❤️ for productive email management**
-
-**Version:** 0.0.2
-**Last Updated:** 2025 Oct 17
-**Maintainer:** Kunal Gautam

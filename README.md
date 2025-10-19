@@ -1,9 +1,3 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
-
-# Write a readme.md file for following code
-
-Based on the code analysis, I can now create a comprehensive README.md file for this email monitoring application.
-
 # Email Monitor
 
 A lightweight system tray application for monitoring multiple email accounts with support for **IMAP** and **POP3** protocols. Built with Go, it features desktop notifications, advanced filtering, and a web-based dashboard for easy management.[^1]

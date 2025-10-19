@@ -603,6 +603,37 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                         </select>
                     </div>
                 </div>
+
+                <!-- FILTERS SECTION -->
+                <div class="form-group">
+                    <label>🔍 Filters (Optional)</label>
+                    <small style="color:#666;display:block;margin-bottom:10px;">Configure keyword and email filters to control which notifications you receive</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Include Keywords (comma-separated)</label>
+                    <input type="text" id="includeKeywords" placeholder="urgent, invoice, payment">
+                    <small style="color:#666;">Only notify for emails with these keywords in subject (leave empty for all)</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Exclude Keywords (comma-separated)</label>
+                    <input type="text" id="excludeKeywords" placeholder="newsletter, marketing, promo">
+                    <small style="color:#666;">Never notify for emails with these keywords in subject</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Include Email Addresses (comma-separated)</label>
+                    <input type="text" id="includeEmails" placeholder="boss@company.com, client@example.com">
+                    <small style="color:#666;">Only notify for emails from these addresses (leave empty for all)</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Exclude Email Addresses (comma-separated)</label>
+                    <input type="text" id="excludeEmails" placeholder="spam@example.com, noreply@marketing.com">
+                    <small style="color:#666;">Never notify for emails from these addresses</small>
+                </div>
+
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="button" class="btn btn-primary" onclick="testConnection()">Test Connection</button>
                     <button type="submit" class="btn btn-success">Save</button>
@@ -661,6 +692,36 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                         </select>
                     </div>
                 </div>
+                <!-- In editModal, add after password field -->
+                <div class="form-group">
+                    <label>🔍 Filters (Optional)</label>
+                    <small style="color:#666;display:block;margin-bottom:10px;">Configure keyword and email filters</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Include Keywords (comma-separated)</label>
+                    <input type="text" id="editIncludeKeywords" placeholder="urgent, invoice, payment">
+                    <small style="color:#666;">Only notify for emails with these keywords in subject</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Exclude Keywords (comma-separated)</label>
+                    <input type="text" id="editExcludeKeywords" placeholder="newsletter, marketing">
+                    <small style="color:#666;">Never notify for emails with these keywords</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Include Email Addresses (comma-separated)</label>
+                    <input type="text" id="editIncludeEmails" placeholder="boss@company.com">
+                    <small style="color:#666;">Only notify for emails from these addresses</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Exclude Email Addresses (comma-separated)</label>
+                    <input type="text" id="editExcludeEmails" placeholder="spam@example.com">
+                    <small style="color:#666;">Never notify for emails from these addresses</small>
+                </div>
+
 
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="submit" class="btn btn-success">Save</button>
@@ -765,7 +826,12 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('username').value,
                 password: document.getElementById('password').value,
                 check_interval: parseInt(document.getElementById('interval').value),
-                folder_mode: document.getElementById('folderMode').value
+                folder_mode: document.getElementById('folderMode').value,
+                include_keyword: document.getElementById('includeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_keyword: document.getElementById('excludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
+                include_email: document.getElementById('includeEmails').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_email: document.getElementById('excludeEmails').value.split(',').map(s => s.trim()).filter(s => s)
+
             };
 
             try {
@@ -797,7 +863,12 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('editUsername').value,
                 password: document.getElementById('editPassword').value,
                 check_interval: parseInt(document.getElementById('editInterval').value),
-                folder_mode: document.getElementById('editFolderMode').value
+                folder_mode: document.getElementById('editFolderMode').value,
+                include_keyword: document.getElementById('editIncludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_keyword: document.getElementById('editExcludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
+                include_email: document.getElementById('editIncludeEmails').value.split(',').map(s => s.trim()).filter(s => s),
+                exclude_email: document.getElementById('editExcludeEmails').value.split(',').map(s => s.trim()).filter(s => s)
+
             };
 
             try {
@@ -832,6 +903,11 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     document.getElementById('editPassword').value = '';
                     document.getElementById('editInterval').value = acc.check_interval;
                     document.getElementById('editFolderMode').value = acc.folder_mode;
+                    document.getElementById('editIncludeKeywords').value = (acc.include_keyword || []).join(', ');
+                    document.getElementById('editExcludeKeywords').value = (acc.exclude_keyword || []).join(', ');
+                    document.getElementById('editIncludeEmails').value = (acc.include_email || []).join(', ');
+                    document.getElementById('editExcludeEmails').value = (acc.exclude_email || []).join(', ');
+
 
                     if (acc.protocol === 'pop3') {
                         document.getElementById('editFolderSettings').style.display = 'none';
@@ -908,10 +984,20 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     const protocolText = acc.protocol.toUpperCase();
                     return ` + "`" + `
                     <div class="account-card">
-                        <h3>${acc.email} <span class="protocol-badge ${protocolClass}">${protocolText}</span> <span class="keyring-badge">🔒</span></h3>
+                        <h3>${acc.email} </h3>
+                        <span class="protocol-badge ${protocolClass}">${protocolText}</span>
                         <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
                         <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
                         ${acc.protocol === 'imap' ? ` + "`" + `<div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>` + "`" + ` : ''}
+                        ${acc.include_keyword && acc.include_keyword.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Include Keywords:</strong> ${acc.include_keyword.join(', ')}</div>` + "`" + ` : ''}
+                        ${acc.exclude_keyword && acc.exclude_keyword.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Exclude Keywords:</strong> ${acc.exclude_keyword.join(', ')}</div>` + "`" + ` : ''}
+                        ${acc.include_email && acc.include_email.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Include Emails:</strong> ${acc.include_email.join(', ')}</div>` + "`" + ` : ''}
+                        ${acc.exclude_email && acc.exclude_email.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Exclude Emails:</strong> ${acc.exclude_email.join(', ')}</div>` + "`" + ` : ''}
+
                         <div class="detail"><strong>Last Check:</strong> ${acc.last_check || 'Never'}</div>
                         <div class="account-actions">
                             <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">Edit</button>
@@ -954,6 +1040,10 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 		IncludeFolders []string `json:"include_folders"`
 		ExcludeFolders []string `json:"exclude_folders"`
 		LastCheck      string   `json:"last_check"`
+		IncludeKeyword []string `json:"include_keyword"`
+		ExcludeKeyword []string `json:"exclude_keyword"`
+		IncludeEmail   []string `json:"include_email"`
+		ExcludeEmail   []string `json:"exclude_email"`
 	}
 
 	accounts := make([]AccountResponse, len(config.Accounts))
@@ -975,6 +1065,10 @@ func handleAccounts(w http.ResponseWriter, r *http.Request) {
 			FolderMode:     acc.FolderMode,
 			IncludeFolders: acc.IncludeFolders,
 			ExcludeFolders: acc.ExcludeFolders,
+			IncludeKeyword: acc.IncludeKeyword,
+			ExcludeKeyword: acc.ExcludeKeyword,
+			IncludeEmail:   acc.IncludeEmail,
+			ExcludeEmail:   acc.ExcludeEmail,
 			LastCheck:      lastCheck,
 		}
 	}
@@ -999,6 +1093,10 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		FolderMode     string   `json:"folder_mode"`
 		IncludeFolders []string `json:"include_folders"`
 		ExcludeFolders []string `json:"exclude_folders"`
+		IncludeKeyword []string `json:"include_keyword"`
+		ExcludeKeyword []string `json:"exclude_keyword"`
+		IncludeEmail   []string `json:"include_email"`
+		ExcludeEmail   []string `json:"exclude_email"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&newAccount); err != nil {
@@ -1023,10 +1121,10 @@ func handleAddAccount(w http.ResponseWriter, r *http.Request) {
 		FolderMode:              newAccount.FolderMode,
 		IncludeFolders:          newAccount.IncludeFolders,
 		ExcludeFolders:          newAccount.ExcludeFolders,
-		IncludeKeyword:          []string{},
-		ExcludeKeyword:          []string{},
-		IncludeEmail:            []string{},
-		ExcludeEmail:            []string{},
+		IncludeKeyword:          newAccount.IncludeKeyword,
+		ExcludeKeyword:          newAccount.ExcludeKeyword,
+		IncludeEmail:            newAccount.IncludeEmail,
+		ExcludeEmail:            newAccount.ExcludeEmail,
 		notifiedEmails:          make(map[string]bool),
 		stopChan:                make(chan bool),
 	}
@@ -1061,6 +1159,10 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		FolderMode     string   `json:"folder_mode"`
 		IncludeFolders []string `json:"include_folders"`
 		ExcludeFolders []string `json:"exclude_folders"`
+		IncludeKeyword []string `json:"include_keyword"`
+		ExcludeKeyword []string `json:"exclude_keyword"`
+		IncludeEmail   []string `json:"include_email"`
+		ExcludeEmail   []string `json:"exclude_email"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
@@ -1089,6 +1191,10 @@ func handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	acc.FolderMode = update.FolderMode
 	acc.IncludeFolders = update.IncludeFolders
 	acc.ExcludeFolders = update.ExcludeFolders
+	acc.IncludeKeyword = update.IncludeKeyword
+	acc.ExcludeKeyword = update.ExcludeKeyword
+	acc.IncludeEmail = update.IncludeEmail
+	acc.ExcludeEmail = update.ExcludeEmail
 
 	if err := saveConfig(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

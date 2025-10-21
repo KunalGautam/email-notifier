@@ -353,7 +353,7 @@ func openBrowser(url string) {
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
 	tmpl := template.Must(template.New("home").Parse(`
-<!DOCTYPE html>
+		<!DOCTYPE html>
 <html>
 <head>
     <title>Email Monitor Dashboard</title>
@@ -523,6 +523,29 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         #folderSettings {
             display: none;
         }
+        #folderSelection, #editFolderSelection {
+            display: none;
+        }
+        .folder-list-container {
+            max-height: 150px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            background: #f9f9f9;
+        }
+        .folder-checkbox-item {
+            margin-bottom: 5px;
+        }
+        .folder-checkbox-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+        .folder-checkbox-label input {
+            margin-right: 8px;
+            width: auto;
+        }
     </style>
 </head>
 <body>
@@ -596,11 +619,23 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     </div>
                     <div class="form-group">
                         <label>Folder Mode</label>
-                        <select id="folderMode">
+                        <select id="folderMode" onchange="updateFolderMode()">
                             <option value="all">All Folders</option>
                             <option value="include">Include Specific Folders</option>
                             <option value="exclude">Exclude Specific Folders</option>
                         </select>
+                    </div>
+                    <div id="folderSelection">
+                        <div class="form-group">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="fetchFolders()">📁 Fetch Folders from Server</button>
+                            <small style="color:#666;display:block;margin-top:5px;">Click to retrieve available folders from your email account</small>
+                        </div>
+                        <div class="form-group">
+                            <label id="folderListLabel">Select Folders</label>
+                            <div id="folderList" class="folder-list-container">
+                                <p style="color:#999;text-align:center;">Click "Fetch Folders" to load available folders</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -685,14 +720,26 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 <div id="editFolderSettings">
                     <div class="form-group">
                         <label>Folder Mode</label>
-                        <select id="editFolderMode">
+                        <select id="editFolderMode" onchange="updateEditFolderMode()">
                             <option value="all">All Folders</option>
                             <option value="include">Include Specific</option>
                             <option value="exclude">Exclude Specific</option>
                         </select>
                     </div>
+                    <div id="editFolderSelection">
+                        <div class="form-group">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="fetchEditFolders()">📁 Fetch Folders from Server</button>
+                            <small style="color:#666;display:block;margin-top:5px;">Click to retrieve available folders</small>
+                        </div>
+                        <div class="form-group">
+                            <label id="editFolderListLabel">Select Folders</label>
+                            <div id="editFolderList" class="folder-list-container">
+                                <p style="color:#999;text-align:center;">Click "Fetch Folders" to load available folders</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <!-- In editModal, add after password field -->
+
                 <div class="form-group">
                     <label>🔍 Filters (Optional)</label>
                     <small style="color:#666;display:block;margin-bottom:10px;">Configure keyword and email filters</small>
@@ -722,7 +769,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     <small style="color:#666;">Never notify for emails from these addresses</small>
                 </div>
 
-
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="submit" class="btn btn-success">Save</button>
                     <button type="button" class="btn btn-danger" onclick="closeEditModal()">Cancel</button>
@@ -734,6 +780,11 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
     <div id="toast" class="toast"></div>
 
     <script>
+        let availableFolders = [];
+        let selectedFolders = [];
+        let editAvailableFolders = [];
+        let editSelectedFolders = [];
+
         function updateProtocolSettings() {
             const protocol = document.getElementById('protocol').value;
             const folderSettings = document.getElementById('folderSettings');
@@ -747,6 +798,162 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 folderSettings.style.display = 'block';
                 serverLabel.textContent = 'IMAP Server';
                 document.getElementById('port').value = '993';
+            }
+            updateFolderMode();
+        }
+
+        function updateFolderMode() {
+            const folderMode = document.getElementById('folderMode').value;
+            const folderSelection = document.getElementById('folderSelection');
+            const folderListLabel = document.getElementById('folderListLabel');
+
+            if (folderMode === 'all') {
+                folderSelection.style.display = 'none';
+            } else {
+                folderSelection.style.display = 'block';
+                folderListLabel.textContent = folderMode === 'include' ? 'Include These Folders' : 'Exclude These Folders';
+            }
+        }
+
+        function updateEditFolderMode() {
+            const folderMode = document.getElementById('editFolderMode').value;
+            const folderSelection = document.getElementById('editFolderSelection');
+            const folderListLabel = document.getElementById('editFolderListLabel');
+
+            if (folderMode === 'all') {
+                folderSelection.style.display = 'none';
+            } else {
+                folderSelection.style.display = 'block';
+                folderListLabel.textContent = folderMode === 'include' ? 'Include These Folders' : 'Exclude These Folders';
+            }
+        }
+
+        async function fetchFolders() {
+            const server = document.getElementById('server').value;
+            const port = parseInt(document.getElementById('port').value);
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const protocol = document.getElementById('protocol').value;
+
+            if (!server || !username || !password) {
+                showToast('Please fill in server, username, and password first', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/accounts/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server, port, username, password, protocol })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    availableFolders = result.folders || [];
+                    renderFolderList();
+                    showToast(result.message, 'success');
+                } else {
+                    showToast(result.message, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to fetch folders: ' + error, 'error');
+            }
+        }
+
+        async function fetchEditFolders() {
+            const index = parseInt(document.getElementById('editIndex').value);
+            const accounts = await (await fetch('/api/accounts')).json();
+            const acc = accounts[index];
+
+            const password = document.getElementById('editPassword').value || '';
+
+            try {
+                const response = await fetch('/api/accounts/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        server: acc.server,
+                        port: acc.port,
+                        username: acc.username,
+                        password: password || 'dummy',
+                        protocol: acc.protocol
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    editAvailableFolders = result.folders || [];
+                    renderEditFolderList();
+                    showToast(result.message, 'success');
+                } else {
+                    showToast(result.message, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to fetch folders: ' + error, 'error');
+            }
+        }
+
+        function renderFolderList() {
+            const container = document.getElementById('folderList');
+            if (availableFolders.length === 0) {
+                container.innerHTML = '<p style="color:#999;text-align:center;">No folders found</p>';
+                return;
+            }
+
+            container.innerHTML = availableFolders.map(folder => {
+                const isSelected = selectedFolders.includes(folder);
+                const escapedFolder = folder.replace(/'/g, "\\'");
+                return ` + "`" + `
+                    <div class="folder-checkbox-item">
+                        <label class="folder-checkbox-label">
+                            <input type="checkbox" value="${folder}"
+                                ${isSelected ? 'checked' : ''}
+                                onchange="toggleFolder('${escapedFolder}')">
+                            <span>${folder}</span>
+                        </label>
+                    </div>
+                ` + "`" + `;
+            }).join('');
+        }
+
+        function renderEditFolderList() {
+            const container = document.getElementById('editFolderList');
+            if (editAvailableFolders.length === 0) {
+                container.innerHTML = '<p style="color:#999;text-align:center;">No folders found</p>';
+                return;
+            }
+
+            container.innerHTML = editAvailableFolders.map(folder => {
+                const isSelected = editSelectedFolders.includes(folder);
+                const escapedFolder = folder.replace(/'/g, "\\'");
+                return ` + "`" + `
+                    <div class="folder-checkbox-item">
+                        <label class="folder-checkbox-label">
+                            <input type="checkbox" value="${folder}"
+                                ${isSelected ? 'checked' : ''}
+                                onchange="toggleEditFolder('${escapedFolder}')">
+                            <span>${folder}</span>
+                        </label>
+                    </div>
+                ` + "`" + `;
+            }).join('');
+        }
+
+        function toggleFolder(folder) {
+            const index = selectedFolders.indexOf(folder);
+            if (index > -1) {
+                selectedFolders.splice(index, 1);
+            } else {
+                selectedFolders.push(folder);
+            }
+        }
+
+        function toggleEditFolder(folder) {
+            const index = editSelectedFolders.indexOf(folder);
+            if (index > -1) {
+                editSelectedFolders.splice(index, 1);
+            } else {
+                editSelectedFolders.push(folder);
             }
         }
 
@@ -783,6 +990,8 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         function showAddModal() {
             document.getElementById('addModal').style.display = 'block';
             document.getElementById('addForm').reset();
+            selectedFolders = [];
+            availableFolders = [];
             updateProtocolSettings();
         }
 
@@ -818,6 +1027,17 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
         document.getElementById('addForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+
+            const folderMode = document.getElementById('folderMode').value;
+            let includeFolders = [];
+            let excludeFolders = [];
+
+            if (folderMode === 'include') {
+                includeFolders = selectedFolders;
+            } else if (folderMode === 'exclude') {
+                excludeFolders = selectedFolders;
+            }
+
             const data = {
                 protocol: document.getElementById('protocol').value,
                 email: document.getElementById('email').value,
@@ -826,12 +1046,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('username').value,
                 password: document.getElementById('password').value,
                 check_interval: parseInt(document.getElementById('interval').value),
-                folder_mode: document.getElementById('folderMode').value,
+                folder_mode: folderMode,
+                include_folders: includeFolders,
+                exclude_folders: excludeFolders,
                 include_keyword: document.getElementById('includeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
                 exclude_keyword: document.getElementById('excludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
                 include_email: document.getElementById('includeEmails').value.split(',').map(s => s.trim()).filter(s => s),
                 exclude_email: document.getElementById('excludeEmails').value.split(',').map(s => s.trim()).filter(s => s)
-
             };
 
             try {
@@ -855,6 +1076,17 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const index = parseInt(document.getElementById('editIndex').value);
+
+            const folderMode = document.getElementById('editFolderMode').value;
+            let includeFolders = [];
+            let excludeFolders = [];
+
+            if (folderMode === 'include') {
+                includeFolders = editSelectedFolders;
+            } else if (folderMode === 'exclude') {
+                excludeFolders = editSelectedFolders;
+            }
+
             const data = {
                 index: index,
                 email: document.getElementById('editEmail').value,
@@ -863,12 +1095,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                 username: document.getElementById('editUsername').value,
                 password: document.getElementById('editPassword').value,
                 check_interval: parseInt(document.getElementById('editInterval').value),
-                folder_mode: document.getElementById('editFolderMode').value,
+                folder_mode: folderMode,
+                include_folders: includeFolders,
+                exclude_folders: excludeFolders,
                 include_keyword: document.getElementById('editIncludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
                 exclude_keyword: document.getElementById('editExcludeKeywords').value.split(',').map(s => s.trim()).filter(s => s),
                 include_email: document.getElementById('editIncludeEmails').value.split(',').map(s => s.trim()).filter(s => s),
                 exclude_email: document.getElementById('editExcludeEmails').value.split(',').map(s => s.trim()).filter(s => s)
-
             };
 
             try {
@@ -908,6 +1141,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     document.getElementById('editIncludeEmails').value = (acc.include_email || []).join(', ');
                     document.getElementById('editExcludeEmails').value = (acc.exclude_email || []).join(', ');
 
+                    editAvailableFolders = [];
+                    editSelectedFolders = [];
+
+                    if (acc.folder_mode === 'include') {
+                        editSelectedFolders = acc.include_folders || [];
+                    } else if (acc.folder_mode === 'exclude') {
+                        editSelectedFolders = acc.exclude_folders || [];
+                    }
 
                     if (acc.protocol === 'pop3') {
                         document.getElementById('editFolderSettings').style.display = 'none';
@@ -915,6 +1156,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                         document.getElementById('editFolderSettings').style.display = 'block';
                     }
 
+                    updateEditFolderMode();
                     document.getElementById('editModal').style.display = 'block';
                 });
         }
@@ -984,11 +1226,14 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                     const protocolText = acc.protocol.toUpperCase();
                     return ` + "`" + `
                     <div class="account-card">
-                        <h3>${acc.email} </h3>
-                        <span class="protocol-badge ${protocolClass}">${protocolText}</span>
+                        <h3>${acc.email} <span class="protocol-badge ${protocolClass}">${protocolText}</span></h3>
                         <div class="detail"><strong>Server:</strong> ${acc.server}:${acc.port}</div>
                         <div class="detail"><strong>Interval:</strong> ${acc.check_interval}s</div>
                         ${acc.protocol === 'imap' ? ` + "`" + `<div class="detail"><strong>Folder Mode:</strong> ${acc.folder_mode}</div>` + "`" + ` : ''}
+                        ${acc.protocol === 'imap' && acc.folder_mode === 'include' && acc.include_folders && acc.include_folders.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Include Folders:</strong> ${acc.include_folders.join(', ')}</div>` + "`" + ` : ''}
+                        ${acc.protocol === 'imap' && acc.folder_mode === 'exclude' && acc.exclude_folders && acc.exclude_folders.length > 0 ?
+                            ` + "`" + `<div class="detail"><strong>Exclude Folders:</strong> ${acc.exclude_folders.join(', ')}</div>` + "`" + ` : ''}
                         ${acc.include_keyword && acc.include_keyword.length > 0 ?
                             ` + "`" + `<div class="detail"><strong>Include Keywords:</strong> ${acc.include_keyword.join(', ')}</div>` + "`" + ` : ''}
                         ${acc.exclude_keyword && acc.exclude_keyword.length > 0 ?
@@ -997,7 +1242,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
                             ` + "`" + `<div class="detail"><strong>Include Emails:</strong> ${acc.include_email.join(', ')}</div>` + "`" + ` : ''}
                         ${acc.exclude_email && acc.exclude_email.length > 0 ?
                             ` + "`" + `<div class="detail"><strong>Exclude Emails:</strong> ${acc.exclude_email.join(', ')}</div>` + "`" + ` : ''}
-
                         <div class="detail"><strong>Last Check:</strong> ${acc.last_check || 'Never'}</div>
                         <div class="account-actions">
                             <button class="btn btn-primary btn-sm" onclick="editAccount(${index})">Edit</button>
@@ -1015,8 +1259,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
         setInterval(loadAccounts, 10000);
     </script>
 </body>
-</html>
-`))
+</html>`))
 	data := struct {
 		AppDir string
 	}{
